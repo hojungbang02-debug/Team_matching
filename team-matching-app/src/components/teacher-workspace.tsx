@@ -49,11 +49,26 @@ const initialConfig: RoomConfig = {
   expectedCount: undefined,
   teamMode: "auto",
   targetTeamSize: 4,
-  recommendedMax: 5,
-  hardMax: 6,
+  recommendedMax: 4,
+  hardMax: 5,
   password: "",
   rubric: defaultRubric,
 };
+
+function withDerivedTeamLimits(config: RoomConfig): RoomConfig {
+  const expectedPerTeam =
+    config.teamMode === "fixed" &&
+    config.expectedCount &&
+    config.fixedTeamCount
+      ? Math.ceil(config.expectedCount / config.fixedTeamCount)
+      : config.targetTeamSize;
+  const recommendedMax = Math.max(2, Math.min(12, expectedPerTeam));
+  return {
+    ...config,
+    recommendedMax,
+    hardMax: Math.min(12, recommendedMax + 1),
+  };
+}
 
 const TEACHER_STATE_KEY = "team-matching-teacher-state";
 
@@ -366,11 +381,13 @@ export function TeacherWorkspace() {
   async function createRoom() {
     setNotice(null);
     try {
+      const roomConfig = withDerivedTeamLimits(config);
+      setConfig(roomConfig);
       const response = await fetch("/api/rooms", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...config,
+          ...roomConfig,
           rubricSource:
             rubricSource === "gemini" ? "gemini" : "teacher",
         }),
@@ -539,19 +556,29 @@ export function TeacherWorkspace() {
     setMatchLoading(true);
     setNotice(null);
     try {
+      const runtimeConfig = withDerivedTeamLimits({
+        ...config,
+        expectedCount: Math.max(
+          participants.length,
+          config.expectedCount ?? 0,
+        ),
+      });
+      setConfig(runtimeConfig);
       const response = await fetch("/api/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          question: config.question,
-          rubric: config.rubric,
+          question: runtimeConfig.question,
+          rubric: runtimeConfig.rubric,
           participants,
           roomCode: roomCode ?? undefined,
           requestedTeamCount:
-            config.teamMode === "fixed"
-              ? config.fixedTeamCount || calculatedTeamCount
-              : Math.ceil(participants.length / config.targetTeamSize),
-          hardMax: config.hardMax,
+            runtimeConfig.teamMode === "fixed"
+              ? runtimeConfig.fixedTeamCount || calculatedTeamCount
+              : Math.ceil(
+                  participants.length / runtimeConfig.targetTeamSize,
+                ),
+          hardMax: runtimeConfig.hardMax,
         }),
       });
       if (!response.ok) throw new Error("팀 구성 실패");
@@ -764,10 +791,13 @@ export function TeacherWorkspace() {
                       placeholder="예: 30"
                       value={config.expectedCount || ""}
                       onChange={(event) =>
-                        setConfig({
-                          ...config,
-                          expectedCount: Number(event.target.value) || undefined,
-                        })
+                        setConfig(
+                          withDerivedTeamLimits({
+                            ...config,
+                            expectedCount:
+                              Number(event.target.value) || undefined,
+                          }),
+                        )
                       }
                     />
                   </Field>
@@ -842,73 +872,69 @@ export function TeacherWorkspace() {
                 <div className="segmented">
                   <button
                     className={config.teamMode === "auto" ? "active" : ""}
-                    onClick={() => setConfig({ ...config, teamMode: "auto" })}
+                    onClick={() =>
+                      setConfig(
+                        withDerivedTeamLimits({
+                          ...config,
+                          teamMode: "auto",
+                        }),
+                      )
+                    }
                   >
-                    목표 인원으로 자동 계산
+                    팀원 수로 계산
                   </button>
                   <button
                     className={config.teamMode === "fixed" ? "active" : ""}
-                    onClick={() => setConfig({ ...config, teamMode: "fixed" })}
+                    onClick={() =>
+                      setConfig(
+                        withDerivedTeamLimits({
+                          ...config,
+                          teamMode: "fixed",
+                        }),
+                      )
+                    }
                   >
                     팀 수 고정
                   </button>
                 </div>
-                <div className="form-grid four">
+                <div className="form-grid two">
                   {config.teamMode === "fixed" ? (
-                    <Field label="고정 팀 수">
+                    <Field label="팀 수">
                       <input
                         type="number"
                         min={1}
-                        value={config.fixedTeamCount || 6}
+                        placeholder="예: 3"
+                        value={config.fixedTeamCount || ""}
                         onChange={(event) =>
-                          setConfig({
-                            ...config,
-                            fixedTeamCount: Number(event.target.value),
-                          })
+                          setConfig(
+                            withDerivedTeamLimits({
+                              ...config,
+                              fixedTeamCount:
+                                Number(event.target.value) || undefined,
+                            }),
+                          )
                         }
                       />
                     </Field>
                   ) : (
-                    <Field label="목표 팀원 수">
+                    <Field label="팀원 수">
                       <input
                         type="number"
                         min={2}
+                        max={12}
                         value={config.targetTeamSize}
                         onChange={(event) =>
-                          setConfig({
-                            ...config,
-                            targetTeamSize: Number(event.target.value),
-                          })
+                          setConfig(
+                            withDerivedTeamLimits({
+                              ...config,
+                              targetTeamSize:
+                                Number(event.target.value) || 2,
+                            }),
+                          )
                         }
                       />
                     </Field>
                   )}
-                  <Field label="권장 최대">
-                    <input
-                      type="number"
-                      min={2}
-                      value={config.recommendedMax}
-                      onChange={(event) =>
-                        setConfig({
-                          ...config,
-                          recommendedMax: Number(event.target.value),
-                        })
-                      }
-                    />
-                  </Field>
-                  <Field label="절대 최대">
-                    <input
-                      type="number"
-                      min={2}
-                      value={config.hardMax}
-                      onChange={(event) =>
-                        setConfig({
-                          ...config,
-                          hardMax: Number(event.target.value),
-                        })
-                      }
-                    />
-                  </Field>
                   <Field label="참여 암호">
                     <input
                       placeholder="예: class24"
@@ -929,7 +955,8 @@ export function TeacherWorkspace() {
                     !config.subject.trim() ||
                     !config.title.trim() ||
                     !config.question.trim() ||
-                    !config.password.trim()
+                    !config.password.trim() ||
+                    (config.teamMode === "fixed" && !config.fixedTeamCount)
                   }
                 >
                   룸 생성하기 →
@@ -980,7 +1007,11 @@ export function TeacherWorkspace() {
                 <StatCard
                   label="예상 팀"
                   value={`${calculatedTeamCount}팀`}
-                  description={`목표 ${config.targetTeamSize}명`}
+                  description={
+                    config.teamMode === "fixed"
+                      ? "팀 수 고정"
+                      : `팀원 ${config.targetTeamSize}명`
+                  }
                 />
               </div>
 
@@ -1091,7 +1122,7 @@ export function TeacherWorkspace() {
                 <StatCard label="확정 인원" value={`${participants.length}명`} />
                 <StatCard label="내용 있는 답변" value={`${answered.length}명`} tone="good" />
                 <StatCard label="정보 확인 필요" value={`${participants.length - answered.length}명`} tone="warn" />
-                <StatCard label="생성할 팀" value={`${Math.ceil(participants.length / config.targetTeamSize)}팀`} tone="blue" />
+                <StatCard label="생성할 팀" value={`${calculatedTeamCount}팀`} tone="blue" />
               </div>
               <div className="panel-footer">
                 <button
