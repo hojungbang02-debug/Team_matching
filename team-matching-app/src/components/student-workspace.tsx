@@ -27,7 +27,15 @@ type StudentTeamResult = {
   name: string;
   representativeIdea: string;
   commonTopic: string;
+  capacity: number;
+  openSlots: number;
   members: { number: string; name: string; isMe: boolean }[];
+};
+
+type StudentResultResponse = {
+  team?: StudentTeamResult;
+  pending?: boolean;
+  teams?: StudentTeamResult[];
 };
 
 const answerDraftKey = (roomCode: string) =>
@@ -53,6 +61,9 @@ export function StudentWorkspace({
     question: string;
   } | null>(null);
   const [teamResult, setTeamResult] = useState<StudentTeamResult | null>(null);
+  const [teamChoices, setTeamChoices] = useState<StudentTeamResult[] | null>(
+    null,
+  );
   const [roomClosed, setRoomClosed] = useState(false);
 
   const applyRoomSnapshot = useCallback(
@@ -160,8 +171,15 @@ export function StudentWorkspace({
           cache: "no-store",
         });
         if (!response.ok) return;
-        const data = (await response.json()) as { team: StudentTeamResult };
-        if (!cancelled) setTeamResult(data.team);
+        const data = (await response.json()) as StudentResultResponse;
+        if (cancelled) return;
+        if (data.team) {
+          setTeamResult(data.team);
+          setTeamChoices(null);
+        } else if (data.pending) {
+          // 자동 배정에서 빠진 학생은 조 목록에서 직접 고릅니다.
+          setTeamChoices(data.teams ?? []);
+        }
       } catch {
         // 결과가 준비되면 다시 시도합니다.
       }
@@ -198,6 +216,27 @@ export function StudentWorkspace({
       setPhase(data.phase === "collecting" ? "answer" : "waiting");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "룸 입장 실패");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function pickTeam(teamNumber: number) {
+    setLoading(true);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/rooms/${roomCode}/result/pick`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ teamNumber }),
+      });
+      const data = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(data.error || "조 선택에 실패했습니다.");
+      setTeamChoices(null);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "조 선택에 실패했습니다.",
+      );
     } finally {
       setLoading(false);
     }
@@ -376,7 +415,52 @@ export function StudentWorkspace({
           </section>
         ) : null}
 
-        {phase === "result" ? (
+        {phase === "result" && !teamResult && teamChoices ? (
+          <section className="student-card">
+            <span className="eyebrow">CHOOSE YOUR TEAM</span>
+            <h1>관심 있는 조를 골라 주세요</h1>
+            <p>
+              답변이 없어 자동 배정에서 빠졌습니다. 조별 주제를 보고 함께
+              하고 싶은 조를 선택하면 바로 배정됩니다.
+            </p>
+            <div className="team-choice-list">
+              {teamChoices.map((team) => (
+                <button
+                  key={team.number}
+                  className="team-choice"
+                  disabled={loading || team.openSlots === 0}
+                  onClick={() => pickTeam(team.number)}
+                >
+                  <div>
+                    <span className="team-choice-name">{team.name}</span>
+                    <strong>
+                      {team.representativeIdea || "대표 주제 미정"}
+                    </strong>
+                    <small>
+                      {team.members.map((member) => member.name).join(" · ") ||
+                        "아직 배정된 학생이 없습니다"}
+                    </small>
+                  </div>
+                  <span
+                    className={`team-choice-slot ${
+                      team.openSlots === 0 ? "full" : ""
+                    }`}
+                  >
+                    {team.openSlots === 0
+                      ? "자리 참"
+                      : `${team.openSlots}자리 남음`}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {notice ? <small className="privacy-copy">{notice}</small> : null}
+            <div className="student-info-note">
+              고른 조는 교사 화면에도 바로 표시됩니다.
+            </div>
+          </section>
+        ) : null}
+
+        {phase === "result" && (teamResult || !teamChoices) ? (
           <section className="student-card result-card">
             {teamResult ? (
               <>

@@ -98,6 +98,20 @@ export function deterministicVector(text: string, dimensions = 96): number[] {
   return norm ? vector.map((value) => value / norm) : vector;
 }
 
+/**
+ * 팀 수를 그대로 유지한 채 인원을 앞 팀부터 한 명씩 더 배분합니다.
+ * 인원이 팀 수보다 적으면 뒤쪽 팀은 0이 됩니다.
+ */
+export function splitCapacities(total: number, teamCount: number): number[] {
+  if (teamCount <= 0) return [];
+  const base = Math.floor(Math.max(0, total) / teamCount);
+  const remainder = Math.max(0, total) % teamCount;
+  return Array.from(
+    { length: teamCount },
+    (_, index) => base + (index < remainder ? 1 : 0),
+  );
+}
+
 export function balancedCapacities(
   participantCount: number,
   teamCount: number,
@@ -286,6 +300,16 @@ export function buildMatchResult({
   const seedSelection = selectDiverseSeeds(analyses, safeTeamCount);
   const warnings = [...seedSelection.warnings];
 
+  // 답변한 학생만 의미 배정하고, 남는 자리는 직접 선택 대상 학생 몫으로 비워 둡니다.
+  // 이렇게 해야 미배정 학생이 한 팀에 몰리지 않고 여러 팀에 고르게 흩어집니다.
+  const matchableIds = new Set(
+    analyses
+      .filter(isMatchableAnalysis)
+      .map((analysis) => analysis.participantId)
+      .filter((id) => participantMap.has(id)),
+  );
+  const semanticCapacities = splitCapacities(matchableIds.size, safeTeamCount);
+
   const teams: TeamResult[] = capacities.map((capacity, index) => {
     const seed = seedSelection.seeds[index];
     const analysis = seed
@@ -349,7 +373,7 @@ export function buildMatchResult({
   for (const item of validRemainder) {
     const preferences = teams
       .map((team, index) => ({ team, index, score: item.scores[index] }))
-      .filter(({ team }) => team.members.length < team.targetCapacity)
+      .filter(({ team, index }) => team.members.length < semanticCapacities[index])
       .sort(
         (a, b) =>
           b.score - a.score ||
@@ -371,37 +395,48 @@ export function buildMatchResult({
       team.members.map((member) => member.participantId),
     ),
   );
-  const fallbackParticipants = participants
+  const unmatched = participants
     .filter((participant) => !assigned.has(participant.id))
     .sort(
       (a, b) =>
         stableHash(a.id) - stableHash(b.id) || a.id.localeCompare(b.id),
     );
 
-  for (const participant of fallbackParticipants) {
-    const available = teams
-      .filter((team) => team.members.length < team.targetCapacity)
-      .sort(
-        (a, b) =>
-          a.members.length - b.members.length ||
-          a.targetCapacity - b.targetCapacity ||
-          a.id.localeCompare(b.id),
-      );
-    const selected = available[0] ?? teams[0];
-    const analysis = analysisMap.get(participant.id);
-    selected.members.push({
-      participantId: participant.id,
-      similarity: null,
-      matchingInformationScore: analysis?.informationScore ?? 0,
-      matchingMethod: "balanced",
+  // 의미 배정된 학생이 한 명도 없으면 빈 팀만 남으므로 이때만 균형 배정합니다.
+  const nothingMatched = assigned.size === 0;
+  if (nothingMatched) {
+    for (const participant of unmatched) {
+      const selected =
+        teams
+          .filter((team) => team.members.length < team.targetCapacity)
+          .sort(
+            (a, b) =>
+              a.members.length - b.members.length ||
+              a.id.localeCompare(b.id),
+          )[0] ?? teams[0];
+      const analysis = analysisMap.get(participant.id);
+      selected.members.push({
+        participantId: participant.id,
+        similarity: null,
+        matchingInformationScore: analysis?.informationScore ?? 0,
+        matchingMethod: "balanced",
+      });
+    }
+    warnings.push({
+      code: "FALLBACK",
+      message: `분석할 수 있는 답변이 없어 ${unmatched.length}명을 인원 균형으로만 배정했습니다.`,
+      requiresApproval: true,
     });
   }
 
-  if (fallbackParticipants.length) {
+  const pendingParticipantIds = nothingMatched
+    ? []
+    : unmatched.map((participant) => participant.id);
+  if (pendingParticipantIds.length) {
     warnings.push({
-      code: "FALLBACK",
-      message: `매칭 정보가 부족한 ${fallbackParticipants.length}명은 팀 인원을 기준으로 균형 배정했습니다.`,
-      requiresApproval: false,
+      code: "UNASSIGNED",
+      message: `답변이 없거나 주제를 벗어난 ${pendingParticipantIds.length}명은 자동 배정하지 않았습니다. 학생이 직접 조를 고르거나 교사가 지정해 주세요.`,
+      requiresApproval: true,
     });
   }
   if (capacities.some((capacity) => capacity > hardMax)) {
@@ -441,6 +476,7 @@ export function buildMatchResult({
     analyses,
     seeds: seedSelection.seeds,
     teams,
+    pendingParticipantIds,
     warnings,
     summary: {
       participantCount: activeCount,

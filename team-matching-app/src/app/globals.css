@@ -137,6 +137,103 @@ a {
   color: var(--blue-deep);
 }
 
+.team-choice-list {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  margin: 6px 0 4px;
+}
+
+.team-choice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: white;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.team-choice:hover:not(:disabled) {
+  border-color: var(--blue);
+  box-shadow: 0 10px 22px rgba(39, 94, 232, 0.12);
+}
+
+.team-choice:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.team-choice .team-choice-name {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--blue);
+}
+
+.team-choice strong {
+  display: block;
+  margin: 2px 0 4px;
+  color: var(--ink);
+}
+
+.team-choice small {
+  color: var(--muted);
+}
+
+.team-choice-slot {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue-deep);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.team-choice-slot.full {
+  background: #f1f2f5;
+  color: var(--muted);
+}
+
+.pending-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pending-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid rgba(185, 63, 63, 0.22);
+  border-radius: 14px;
+  background: #fff8f8;
+}
+
+.pending-row strong {
+  min-width: 96px;
+}
+
+.pending-row p {
+  flex: 1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pending-row select {
+  flex-shrink: 0;
+}
+
 .button.danger {
   border-color: rgba(185, 63, 63, 0.28);
   background: white;

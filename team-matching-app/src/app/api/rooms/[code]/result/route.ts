@@ -236,7 +236,7 @@ export async function GET(
     supabase
       .from("teams")
       .select(
-        "team_number, representative_idea, common_topic, team_members(participant_id)",
+        "team_number, target_capacity, representative_idea, common_topic, team_members(participant_id)",
       )
       .eq("matching_run_id", run.id)
       .order("team_number"),
@@ -251,6 +251,11 @@ export async function GET(
     name: `${team.team_number}조`,
     representativeIdea: team.representative_idea ?? "",
     commonTopic: team.common_topic ?? "",
+    capacity: team.target_capacity,
+    openSlots: Math.max(
+      0,
+      team.target_capacity - (team.team_members ?? []).length,
+    ),
     members: (team.team_members ?? [])
       .map((member: { participant_id: string }) => {
         const row = roster.get(member.participant_id);
@@ -265,9 +270,24 @@ export async function GET(
       .filter((member): member is NonNullable<typeof member> => Boolean(member)),
   });
 
+  const assignedIds = new Set(
+    (teams ?? []).flatMap((team) =>
+      (team.team_members ?? []).map(
+        (member: { participant_id: string }) => member.participant_id,
+      ),
+    ),
+  );
+
   if (teacherRoom) {
     return NextResponse.json({
       teams: (teams ?? []).map((team) => toTeam(team)),
+      pending: [...roster.values()]
+        .filter((row) => !assignedIds.has(row.id))
+        .map((row) => ({
+          id: row.id,
+          number: row.student_number ?? "",
+          name: row.display_name,
+        })),
     });
   }
 
@@ -278,10 +298,11 @@ export async function GET(
     ),
   );
   if (!myTeam) {
-    return NextResponse.json(
-      { error: "배정된 팀을 찾을 수 없습니다." },
-      { status: 404 },
-    );
+    // 자동 배정에서 빠진 학생은 조 목록을 보고 직접 고릅니다.
+    return NextResponse.json({
+      pending: true,
+      teams: (teams ?? []).map((team) => toTeam(team, participant!.id)),
+    });
   }
   return NextResponse.json({ team: toTeam(myTeam, participant!.id) });
 }

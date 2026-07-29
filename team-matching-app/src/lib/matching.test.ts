@@ -120,6 +120,99 @@ describe("matching utilities", () => {
     expect(picked.filter((id) => id.endsWith("energy"))).toHaveLength(1);
   });
 
+  it("leaves open slots for unanswered students instead of piling them into one team", () => {
+    // 20명 5조. 16명은 4개 주제로 정상 답변하고 4명은 빈 답변/주제 이탈입니다.
+    // 예전에는 의미 배정이 4개 팀을 정원까지 채워, 남은 4명이 한 팀에 몰렸습니다.
+    const topics = [
+      [1, 0, 0, 0],
+      [0, 1, 0, 0],
+      [0, 0, 1, 0],
+      [0, 0, 0, 1],
+    ];
+    const participants: ParticipantInput[] = [];
+    const analyses: AnalyzedResponse[] = [];
+    for (let topic = 0; topic < 4; topic += 1) {
+      for (let member = 0; member < 4; member += 1) {
+        const id = `good-${topic}-${member}`;
+        participants.push({
+          id, number: String(participants.length + 1), name: id,
+          answer: "정상 답변", submitted: true,
+        });
+        // 같은 주제끼리 아주 가깝고 다른 주제와는 멀도록 약간씩만 흔듭니다.
+        const embedding = topics[topic].map(
+          (value, index) => value * 10 + (index === (topic + 1) % 4 ? member * 0.1 : 0),
+        );
+        analyses.push({
+          participantId: id,
+          fields: [{ key: "topic", label: "문제 주제", value: id, level: 4 }],
+          informationScore: 1 - member * 0.01,
+          isEmpty: false, isOffTopic: false, hasMatchingInformation: true,
+          reason: "정상", embedding,
+        });
+      }
+    }
+    for (let index = 0; index < 4; index += 1) {
+      const id = `blank-${index}`;
+      participants.push({
+        id, number: String(participants.length + 1), name: id,
+        answer: index < 2 ? "" : "ㅋㅋㅋ 축구하고 싶다", submitted: index >= 2,
+      });
+      analyses.push({
+        participantId: id,
+        fields: [{ key: "topic", label: "문제 주제", value: null, level: 0 }],
+        informationScore: 0,
+        isEmpty: index < 2, isOffTopic: index >= 2, hasMatchingInformation: false,
+        reason: "정보 없음", embedding: [],
+      });
+    }
+
+    const result = buildMatchResult({
+      participants, analyses, requestedTeamCount: 5, hardMax: 5,
+      source: "demo-fallback",
+    });
+
+    // 답변 없는 4명은 자동 배정되지 않습니다.
+    expect(result.pendingParticipantIds.sort()).toEqual([
+      "blank-0", "blank-1", "blank-2", "blank-3",
+    ]);
+    // 정원은 그대로 4명씩이고, 빈자리가 한 팀에 몰리지 않고 흩어집니다.
+    expect(result.teams.map((team) => team.targetCapacity)).toEqual([4, 4, 4, 4, 4]);
+    const openSlots = result.teams.map(
+      (team) => team.targetCapacity - team.members.length,
+    );
+    expect(openSlots.reduce((sum, value) => sum + value, 0)).toBe(4);
+    expect(Math.max(...openSlots)).toBeLessThanOrEqual(2);
+    expect(
+      result.warnings.some((warning) => warning.code === "UNASSIGNED"),
+    ).toBe(true);
+    expect(
+      result.warnings.find((warning) => warning.code === "UNASSIGNED")
+        ?.requiresApproval,
+    ).toBe(true);
+  });
+
+  it("still fills teams when no answer can be analysed at all", () => {
+    const participants: ParticipantInput[] = Array.from({ length: 6 }, (_, index) => ({
+      id: `p-${index}`, number: String(index + 1), name: `학생${index}`,
+      answer: "", submitted: false,
+    }));
+    const analyses: AnalyzedResponse[] = participants.map((participant) => ({
+      participantId: participant.id,
+      fields: [], informationScore: 0,
+      isEmpty: true, isOffTopic: false, hasMatchingInformation: false,
+      reason: "빈 답변", embedding: [],
+    }));
+
+    const result = buildMatchResult({
+      participants, analyses, requestedTeamCount: 3, hardMax: 4,
+      source: "demo-fallback",
+    });
+    const assigned = result.teams.flatMap((team) => team.members);
+    expect(assigned).toHaveLength(6);
+    expect(result.pendingParticipantIds).toHaveLength(0);
+    expect(result.teams.every((team) => team.members.length === 2)).toBe(true);
+  });
+
   it("assigns low-information answers semantically instead of by balance only", () => {
     const participants: ParticipantInput[] = [
       "급식 잔반이 많아 아깝습니다.",

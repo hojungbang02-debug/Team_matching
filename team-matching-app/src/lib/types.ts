@@ -68,7 +68,8 @@ export type TeamMember = {
   participantId: string;
   similarity: number | null;
   matchingInformationScore: number;
-  matchingMethod: "semantic" | "balanced";
+  /** teacher = 교사 수동 배정 또는 학생 직접 선택 */
+  matchingMethod: "seed" | "semantic" | "balanced" | "teacher";
 };
 
 export type TeamResult = {
@@ -88,7 +89,8 @@ export type MatchWarning = {
     | "LOW_INFORMATION"
     | "CAPACITY"
     | "LOW_SIMILARITY"
-    | "FALLBACK";
+    | "FALLBACK"
+    | "UNASSIGNED";
   message: string;
   requiresApproval: boolean;
 };
@@ -98,6 +100,8 @@ export type MatchResult = {
   analyses: AnalyzedResponse[];
   seeds: SeedResult[];
   teams: TeamResult[];
+  /** 답변이 없거나 주제를 벗어나 자동 배정하지 않은 학생. 학생이 직접 조를 고릅니다. */
+  pendingParticipantIds: string[];
   warnings: MatchWarning[];
   summary: {
     participantCount: number;

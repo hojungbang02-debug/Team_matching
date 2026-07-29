@@ -110,6 +110,17 @@ type ResumeRoom = {
   phase: string;
 };
 
+type ConfirmedResult = {
+  teams: {
+    number: number;
+    name: string;
+    representativeIdea: string;
+    openSlots: number;
+    members: { number: string; name: string }[];
+  }[];
+  pending: { id: string; number: string; name: string }[];
+};
+
 function Field({
   label,
   children,
@@ -166,6 +177,8 @@ export function TeacherWorkspace() {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
   const [resumeRoom, setResumeRoom] = useState<ResumeRoom | null>(null);
+  const [confirmedResult, setConfirmedResult] =
+    useState<ConfirmedResult | null>(null);
 
   const submitted = participants.filter(
     (participant) => participant.submitted,
@@ -346,6 +359,32 @@ export function TeacherWorkspace() {
     };
   }, [matchResult, roomCode, phase]);
 
+  // 확정 후에는 학생이 직접 고른 조까지 반영되도록 서버 결과를 계속 읽어 옵니다.
+  useEffect(() => {
+    if (phase !== "completed" || !roomCode) return;
+
+    let cancelled = false;
+    async function loadConfirmed() {
+      try {
+        const response = await fetch(`/api/rooms/${roomCode}/result`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as ConfirmedResult;
+        if (!cancelled) setConfirmedResult(data);
+      } catch {
+        // 다음 주기에서 다시 시도합니다.
+      }
+    }
+
+    void loadConfirmed();
+    const timer = window.setInterval(loadConfirmed, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [phase, roomCode]);
+
   async function suggestRubric() {
     setRubricLoading(true);
     setNotice(null);
@@ -443,6 +482,7 @@ export function TeacherWorkspace() {
     setNotice(null);
     setQrDataUrl(null);
     setQrOpen(false);
+    setConfirmedResult(null);
   }
 
   function startNewRoom() {
@@ -687,6 +727,36 @@ export function TeacherWorkspace() {
     }
   }
 
+  /** 학생 선택을 기다리지 않고 교사가 직접 조를 지정합니다. */
+  function assignPending(participantId: string, destinationId: string) {
+    if (!matchResult || !destinationId) return;
+    const analysis = matchResult.analyses.find(
+      (item) => item.participantId === participantId,
+    );
+    setMatchResult({
+      ...matchResult,
+      pendingParticipantIds: matchResult.pendingParticipantIds.filter(
+        (id) => id !== participantId,
+      ),
+      teams: matchResult.teams.map((team) =>
+        team.id === destinationId
+          ? {
+              ...team,
+              members: [
+                ...team.members,
+                {
+                  participantId,
+                  similarity: null,
+                  matchingInformationScore: analysis?.informationScore ?? 0,
+                  matchingMethod: "teacher" as const,
+                },
+              ],
+            }
+          : team,
+      ),
+    });
+  }
+
   function moveMember(participantId: string, destinationId: string) {
     if (!matchResult) return;
     const nextTeams = matchResult.teams.map((team) => ({
@@ -704,7 +774,7 @@ export function TeacherWorkspace() {
     }
     const destination = nextTeams.find((team) => team.id === destinationId);
     if (movedMember && destination) {
-      destination.members.push({ ...movedMember, matchingMethod: "balanced" });
+      destination.members.push({ ...movedMember, matchingMethod: "teacher" });
     }
     setMatchResult({ ...matchResult, teams: nextTeams });
   }
@@ -1302,6 +1372,65 @@ export function TeacherWorkspace() {
                 </div>
               ) : null}
 
+              {matchResult.pendingParticipantIds.length ? (
+                <section className="panel compact-panel">
+                  <div className="panel-heading inline">
+                    <div>
+                      <span className="eyebrow">CHECK REQUIRED</span>
+                      <h2>
+                        확인이 필요한 학생{" "}
+                        {matchResult.pendingParticipantIds.length}명
+                      </h2>
+                    </div>
+                  </div>
+                  <p className="inline-help">
+                    답변이 없거나 주제를 벗어나 자동 배정하지 않았습니다.
+                    비워 두면 확정 후 학생이 직접 조를 고르고, 여기서 조를
+                    지정하면 바로 배정됩니다.
+                  </p>
+                  <div className="pending-list">
+                    {matchResult.pendingParticipantIds.map((participantId) => {
+                      const participant = participantMap.get(participantId);
+                      const analysis = matchResult.analyses.find(
+                        (item) => item.participantId === participantId,
+                      );
+                      return (
+                        <div className="pending-row" key={participantId}>
+                          <strong>
+                            {participant?.number} {participant?.name}
+                          </strong>
+                          <p>
+                            {participant?.answer
+                              ? `“${participant.answer.slice(0, 60)}${
+                                  participant.answer.length > 60 ? "…" : ""
+                                }” · ${
+                                  analysis?.isOffTopic
+                                    ? "주제를 벗어남"
+                                    : "매칭 정보 부족"
+                                }`
+                              : "답변을 제출하지 않았습니다."}
+                          </p>
+                          <select
+                            defaultValue=""
+                            aria-label={`${participant?.name} 학생 조 지정`}
+                            onChange={(event) =>
+                              assignPending(participantId, event.target.value)
+                            }
+                          >
+                            <option value="">학생이 직접 선택</option>
+                            {matchResult.teams.map((target) => (
+                              <option key={target.id} value={target.id}>
+                                {target.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              ) : null}
+
               <div className="team-grid">
                 {matchResult.teams.map((team, teamIndex) => {
                   const overRecommended =
@@ -1420,21 +1549,48 @@ export function TeacherWorkspace() {
               <span className="eyebrow">MATCHING COMPLETE</span>
               <h1>{matchResult.summary.teamCount}개 팀 구성이 확정되었습니다</h1>
               <div className="completion-grid">
-                {matchResult.teams.map((team) => (
-                  <article key={team.id}>
-                    <span>{team.name}</span>
-                    <strong>{team.representativeIdea}</strong>
-                    <p>
-                      {team.members
-                        .map(
-                          (member) =>
-                            participantMap.get(member.participantId)?.name,
-                        )
-                        .join(" · ")}
-                    </p>
-                  </article>
-                ))}
+                {(confirmedResult?.teams ?? []).length
+                  ? confirmedResult!.teams.map((team) => (
+                      <article key={team.number}>
+                        <span>
+                          {team.name}
+                          {team.openSlots
+                            ? ` · ${team.openSlots}자리 대기`
+                            : ""}
+                        </span>
+                        <strong>{team.representativeIdea}</strong>
+                        <p>
+                          {team.members
+                            .map((member) => member.name)
+                            .join(" · ") || "아직 배정된 학생이 없습니다"}
+                        </p>
+                      </article>
+                    ))
+                  : matchResult.teams.map((team) => (
+                      <article key={team.id}>
+                        <span>{team.name}</span>
+                        <strong>{team.representativeIdea}</strong>
+                        <p>
+                          {team.members
+                            .map(
+                              (member) =>
+                                participantMap.get(member.participantId)?.name,
+                            )
+                            .join(" · ")}
+                        </p>
+                      </article>
+                    ))}
               </div>
+              {confirmedResult?.pending.length ? (
+                <p className="inline-help">
+                  아직 조를 고르지 않은 학생{" "}
+                  {confirmedResult.pending.length}명:{" "}
+                  {confirmedResult.pending
+                    .map((student) => student.name)
+                    .join(", ")}
+                  . 학생 화면에서 선택하면 이 목록에서 사라집니다.
+                </p>
+              ) : null}
               <p className="inline-help">
                 학생은 입장했던 링크에서 자기 팀과 팀원을 확인할 수 있습니다.
                 수업이 끝나면 아래에서 데이터를 삭제해 주세요. 삭제하지 않아도
