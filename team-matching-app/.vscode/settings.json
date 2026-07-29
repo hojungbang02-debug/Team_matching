@@ -1,0 +1,18 @@
+{
+  "terminal.integrated.profiles.linux": {
+    "team_match": {
+      "path": "/bin/bash",
+      "args": [
+        "-lc",
+        "source /home/hojun5363/miniconda3/etc/profile.d/conda.sh && conda activate team_match && exec bash"
+      ]
+    }
+  },
+  "terminal.integrated.defaultProfile.linux": "team_match",
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "eslint.workingDirectories": [
+    {
+      "mode": "auto"
+    }
+  ]
+}
