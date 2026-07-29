@@ -22,6 +22,9 @@ type StudentRoomSnapshot = {
   };
 };
 
+const answerDraftKey = (roomCode: string) =>
+  `team-matching:answer-draft:${roomCode.toUpperCase()}`;
+
 export function StudentWorkspace({
   initialRoomCode = "",
 }: {
@@ -42,30 +45,42 @@ export function StudentWorkspace({
     question: string;
   } | null>(null);
 
-  const applyRoomSnapshot = useCallback((data: StudentRoomSnapshot) => {
-    setParticipantCount(data.participantCount);
-    setRoom(data.room);
-    if (data.participant) {
-      setName(
-        [data.participant.number, data.participant.name]
-          .filter(Boolean)
-          .join(" "),
-      );
-      setAnswer(data.participant.answer);
-    }
+  const applyRoomSnapshot = useCallback(
+    (data: StudentRoomSnapshot, restoreAnswer = false) => {
+      setParticipantCount(data.participantCount);
+      setRoom(data.room);
+      if (data.participant) {
+        setName(
+          [data.participant.number, data.participant.name]
+            .filter(Boolean)
+            .join(" "),
+        );
 
-    if (data.room.phase === "completed") {
-      setPhase("result");
-    } else if (data.room.phase === "collecting") {
-      setPhase(data.participant?.submitted ? "submitted" : "answer");
-    } else if (
-      ["locked", "analyzing", "review"].includes(data.room.phase)
-    ) {
-      setPhase("submitted");
-    } else {
-      setPhase("waiting");
-    }
-  }, []);
+        if (data.participant.submitted) {
+          setAnswer(data.participant.answer);
+          window.sessionStorage.removeItem(answerDraftKey(roomCode));
+        } else if (restoreAnswer) {
+          const draft = window.sessionStorage.getItem(
+            answerDraftKey(roomCode),
+          );
+          setAnswer(draft ?? data.participant.answer);
+        }
+      }
+
+      if (data.room.phase === "completed") {
+        setPhase("result");
+      } else if (data.room.phase === "collecting") {
+        setPhase(data.participant?.submitted ? "submitted" : "answer");
+      } else if (
+        ["locked", "analyzing", "review"].includes(data.room.phase)
+      ) {
+        setPhase("submitted");
+      } else {
+        setPhase("waiting");
+      }
+    },
+    [roomCode],
+  );
 
   useEffect(() => {
     if (!initialRoomCode) return;
@@ -79,7 +94,7 @@ export function StudentWorkspace({
         );
         if (!response.ok) return;
         const data = (await response.json()) as StudentRoomSnapshot;
-        if (!cancelled) applyRoomSnapshot(data);
+        if (!cancelled) applyRoomSnapshot(data, true);
       } catch {
         // 입장 화면에서 다시 시도할 수 있습니다.
       }
@@ -156,6 +171,7 @@ export function StudentWorkspace({
       });
       const data = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(data.error || "답변 제출 실패");
+      window.sessionStorage.removeItem(answerDraftKey(roomCode));
       setPhase("submitted");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "답변 제출 실패");
@@ -281,7 +297,14 @@ export function StudentWorkspace({
               placeholder="예: 급식실에서 버려지는 음식이 많아서, 학생이 먹을 양을 미리 선택하는 서비스를 만들고 싶어요."
               maxLength={500}
               value={answer}
-              onChange={(event) => setAnswer(event.target.value)}
+              onChange={(event) => {
+                const nextAnswer = event.target.value;
+                setAnswer(nextAnswer);
+                window.sessionStorage.setItem(
+                  answerDraftKey(roomCode),
+                  nextAnswer,
+                );
+              }}
             />
             <div className="answer-meta">
               <span>{answer.length} / 500자</span>
