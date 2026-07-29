@@ -2,10 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppHeader } from "@/components/app-header";
-import {
-  defaultRubric,
-  demoParticipants,
-} from "@/lib/demo-data";
+import { defaultRubric } from "@/lib/demo-data";
 import type {
   Criterion,
   MatchResult,
@@ -34,18 +31,39 @@ const phaseLabels: Record<RoomPhase, string> = {
 };
 
 const initialConfig: RoomConfig = {
-  subject: "통합과학",
-  title: "우리 학교를 바꾸는 아이디어",
-  className: "2학년 3반",
-  question:
-    "학교생활에서 해결하고 싶은 문제와 그 문제를 해결할 아이디어를 구체적으로 적어주세요.",
-  expectedCount: 30,
+  subject: "",
+  title: "",
+  className: "",
+  question: "",
+  expectedCount: undefined,
   teamMode: "auto",
-  targetTeamSize: 5,
+  targetTeamSize: 4,
   recommendedMax: 5,
   hardMax: 6,
-  password: "class24",
+  password: "",
   rubric: defaultRubric,
+};
+
+const TEACHER_STATE_KEY = "team-matching-teacher-state";
+
+type TeacherRoomSnapshot = {
+  room: {
+    code: string;
+    subject: string;
+    title: string;
+    className: string | null;
+    question: string;
+    phase: string;
+    expectedCount: number | null;
+    teamMode: "auto" | "fixed";
+    fixedTeamCount: number | null;
+    targetTeamSize: number;
+    recommendedMax: number;
+    hardMax: number;
+    rubric: Criterion[];
+    rubricSource: "gemini" | "teacher" | "demo-fallback";
+  };
+  participants?: ParticipantInput[];
 };
 
 function Field({
@@ -100,6 +118,7 @@ export function TeacherWorkspace() {
   const [approvals, setApprovals] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
+  const [stateRestored, setStateRestored] = useState(false);
 
   const submitted = participants.filter(
     (participant) => participant.submitted,
@@ -127,6 +146,99 @@ export function TeacherWorkspace() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+    async function restoreState() {
+      await Promise.resolve();
+      if (cancelled) return;
+      const urlCode = new URLSearchParams(window.location.search)
+        .get("room")
+        ?.toUpperCase();
+      try {
+        const saved = window.localStorage.getItem(TEACHER_STATE_KEY);
+        if (saved) {
+          const snapshot = JSON.parse(saved) as {
+            roomCode: string;
+            phase: RoomPhase;
+            config: RoomConfig;
+            rubricSource: "default" | "gemini";
+            matchResult: MatchResult | null;
+            approvals: string[];
+          };
+          if (!urlCode || snapshot.roomCode === urlCode) {
+            setRoomCode(snapshot.roomCode);
+            setPhase(snapshot.phase);
+            setConfig({ ...snapshot.config, password: "" });
+            setRubricSource(snapshot.rubricSource);
+            setMatchResult(snapshot.matchResult);
+            setApprovals(snapshot.approvals);
+          } else {
+            setRoomCode(urlCode);
+            setPhase("waiting");
+          }
+        } else if (urlCode) {
+          setRoomCode(urlCode);
+          setPhase("waiting");
+        } else {
+          const response = await fetch("/api/rooms/current", {
+            cache: "no-store",
+          });
+          if (response.ok) {
+            const data = (await response.json()) as { code: string };
+            setRoomCode(data.code);
+            setPhase("waiting");
+            window.history.replaceState(
+              null,
+              "",
+              `/teacher?room=${data.code}`,
+            );
+          }
+        }
+      } catch {
+        window.localStorage.removeItem(TEACHER_STATE_KEY);
+      } finally {
+        setStateRestored(true);
+      }
+    }
+
+    void restoreState();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!stateRestored || !roomCode || phase === "setup") return;
+    const compactResult = matchResult
+      ? {
+          ...matchResult,
+          analyses: matchResult.analyses.map((analysis) => ({
+            ...analysis,
+            embedding: [],
+          })),
+        }
+      : null;
+    window.localStorage.setItem(
+      TEACHER_STATE_KEY,
+      JSON.stringify({
+        roomCode,
+        phase,
+        config: { ...config, password: "" },
+        rubricSource,
+        matchResult: compactResult,
+        approvals,
+      }),
+    );
+  }, [
+    approvals,
+    config,
+    matchResult,
+    phase,
+    roomCode,
+    rubricSource,
+    stateRestored,
+  ]);
+
+  useEffect(() => {
     if (!roomCode || phase === "setup") return;
 
     let cancelled = false;
@@ -135,13 +247,52 @@ export function TeacherWorkspace() {
         const response = await fetch(`/api/rooms/${roomCode}`, {
           cache: "no-store",
         });
-        if (!response.ok) return;
-        const data = (await response.json()) as {
-          participants?: ParticipantInput[];
-        };
-        if (!cancelled && data.participants) {
-          setParticipants(data.participants);
+        if (response.status === 401) {
+          window.localStorage.removeItem(TEACHER_STATE_KEY);
+          window.history.replaceState(null, "", "/teacher");
+          setRoomCode(null);
+          setPhase("setup");
+          setNotice("교사 세션이 만료되었습니다. 새 룸을 만들어 주세요.");
+          return;
         }
+        if (!response.ok) return;
+        const data = (await response.json()) as TeacherRoomSnapshot;
+        if (cancelled) return;
+        if (data.participants) setParticipants(data.participants);
+        setConfig((current) => ({
+          subject: data.room.subject,
+          title: data.room.title,
+          className: data.room.className ?? "",
+          question: data.room.question,
+          expectedCount: data.room.expectedCount ?? undefined,
+          teamMode: data.room.teamMode,
+          fixedTeamCount: data.room.fixedTeamCount ?? undefined,
+          targetTeamSize: data.room.targetTeamSize,
+          recommendedMax: data.room.recommendedMax,
+          hardMax: data.room.hardMax,
+          password: current.password,
+          rubric: data.room.rubric.length
+            ? data.room.rubric
+            : current.rubric,
+        }));
+        setRubricSource(
+          data.room.rubricSource === "gemini" ? "gemini" : "default",
+        );
+        const restoredPhase: RoomPhase =
+          data.room.phase === "waiting"
+            ? "waiting"
+            : data.room.phase === "collecting"
+              ? "collecting"
+              : data.room.phase === "review"
+                ? matchResult
+                  ? "review"
+                  : "analyzing"
+                : data.room.phase === "completed"
+                  ? matchResult
+                    ? "completed"
+                    : "analyzing"
+                  : "analyzing";
+        setPhase(restoredPhase);
       } catch {
         // 다음 polling 주기에서 다시 시도합니다.
       }
@@ -153,7 +304,7 @@ export function TeacherWorkspace() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [roomCode, phase]);
+  }, [matchResult, roomCode, phase]);
 
   async function suggestRubric() {
     setRubricLoading(true);
@@ -210,6 +361,11 @@ export function TeacherWorkspace() {
       }
       setRoomCode(data.code);
       setPhase("waiting");
+      window.history.replaceState(
+        null,
+        "",
+        `/teacher?room=${data.code}`,
+      );
       setNotice(
         `룸 ${data.code}가 생성되었습니다. 링크를 공유하고 학생 입장을 기다려 주세요.`,
       );
@@ -218,11 +374,6 @@ export function TeacherWorkspace() {
         error instanceof Error ? error.message : "룸 생성에 실패했습니다.",
       );
     }
-  }
-
-  function loadDemo() {
-    setParticipants(demoParticipants);
-    setNotice("서로 다른 주제와 정보 부족 응답을 포함한 가상 학생 30명을 불러왔습니다.");
   }
 
   async function copyJoinLink() {
@@ -269,6 +420,25 @@ export function TeacherWorkspace() {
       setPhase("analyzing");
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "응답 마감 실패");
+    }
+  }
+
+  async function returnToAnalysis() {
+    try {
+      await saveRoomPhase("analyzing");
+      setPhase("analyzing");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "단계 변경 실패");
+    }
+  }
+
+  async function completeMatching() {
+    try {
+      await saveRoomPhase("completed");
+      setPhase("completed");
+      setNotice("팀 구성을 확정했습니다.");
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "팀 확정 실패");
     }
   }
 
@@ -368,29 +538,13 @@ export function TeacherWorkspace() {
               return (
                 <li key={item} className={state}>
                   <span>{state === "done" ? "✓" : index + 1}</span>
-                  <div>
-                    <strong>{phaseLabels[item]}</strong>
-                    <small>
-                      {
-                        [
-                          "질문과 정원",
-                          "참여 확인",
-                          "응답 수집",
-                          "AI 처리",
-                          "교사 승인",
-                          "학생 공개",
-                        ][index]
-                      }
-                    </small>
-                  </div>
+                   <div>
+                     <strong>{phaseLabels[item]}</strong>
+                   </div>
                 </li>
               );
             })}
           </ol>
-          <div className="privacy-note">
-            <span>학생 보호 원칙</span>
-            <p>점수는 학생의 능력이 아니라 매칭에 사용할 정보량만 나타냅니다.</p>
-          </div>
         </aside>
 
         <main className="workspace-main">
@@ -409,9 +563,7 @@ export function TeacherWorkspace() {
                 <div>
                   <span className="eyebrow">ROOM SETUP</span>
                   <h1>아이디어 팀 매칭 룸 만들기</h1>
-                  <p>예상 인원은 참고값이며, 수집 마감 시점의 실제 참여 인원으로 팀을 계산합니다.</p>
                 </div>
-                <span className="step-badge">1 / 3</span>
               </div>
 
               <div className="section-block">
@@ -419,12 +571,12 @@ export function TeacherWorkspace() {
                   <span>01</span>
                   <div>
                     <h2>수업 정보</h2>
-                    <p>학생에게 보일 과제 이름과 질문을 입력합니다.</p>
                   </div>
                 </div>
                 <div className="form-grid two">
                   <Field label="과목명">
                     <input
+                      placeholder="예: 통합과학"
                       value={config.subject}
                       onChange={(event) =>
                         setConfig({ ...config, subject: event.target.value })
@@ -433,6 +585,7 @@ export function TeacherWorkspace() {
                   </Field>
                   <Field label="수업·반">
                     <input
+                      placeholder="예: 2학년 3반"
                       value={config.className}
                       onChange={(event) =>
                         setConfig({ ...config, className: event.target.value })
@@ -441,16 +594,18 @@ export function TeacherWorkspace() {
                   </Field>
                   <Field label="과제명">
                     <input
+                      placeholder="예: 우리 학교를 바꾸는 아이디어"
                       value={config.title}
                       onChange={(event) =>
                         setConfig({ ...config, title: event.target.value })
                       }
                     />
                   </Field>
-                  <Field label="예상 학생 수" hint="입장을 막는 정원이 아닙니다.">
+                  <Field label="예상 학생 수">
                     <input
                       type="number"
                       min={1}
+                      placeholder="예: 30"
                       value={config.expectedCount || ""}
                       onChange={(event) =>
                         setConfig({
@@ -464,6 +619,7 @@ export function TeacherWorkspace() {
                 <Field label="학생에게 제시할 자유 주제 질문">
                   <textarea
                     rows={4}
+                    placeholder="예: 학교생활에서 해결하고 싶은 문제와 해결 아이디어를 적어주세요."
                     value={config.question}
                     onChange={(event) =>
                       setConfig({ ...config, question: event.target.value })
@@ -477,12 +633,11 @@ export function TeacherWorkspace() {
                   <span>02</span>
                   <div>
                     <h2>질문별 매칭 기준</h2>
-                    <p>AI가 과목을 채점하지 않고, 이 질문에서 팀 매칭에 필요한 정보만 제안합니다.</p>
                   </div>
                   <button
                     className="button soft"
                     onClick={suggestRubric}
-                    disabled={rubricLoading}
+                    disabled={rubricLoading || !config.question.trim()}
                   >
                     {rubricLoading ? "기준 분석 중…" : "✦ AI 기준 제안"}
                   </button>
@@ -517,7 +672,7 @@ export function TeacherWorkspace() {
                   ))}
                 </div>
                 <p className="inline-help">
-                  {rubricSource === "gemini" ? "● AI 제안 기준" : "● 기본 기준"} · 학생마다 바뀌지 않고 이 룸의 모든 응답에 동일하게 적용됩니다.
+                  {rubricSource === "gemini" ? "● AI 제안 기준" : "● 기본 기준"}
                 </p>
               </div>
 
@@ -526,7 +681,6 @@ export function TeacherWorkspace() {
                   <span>03</span>
                   <div>
                     <h2>팀과 입장 정책</h2>
-                    <p>권장 인원 초과는 교사 승인, 절대 최대 인원 초과는 확정 전에 수정합니다.</p>
                   </div>
                 </div>
                 <div className="segmented">
@@ -601,6 +755,7 @@ export function TeacherWorkspace() {
                   </Field>
                   <Field label="참여 암호">
                     <input
+                      placeholder="예: class24"
                       value={config.password}
                       onChange={(event) =>
                         setConfig({ ...config, password: event.target.value })
@@ -611,8 +766,16 @@ export function TeacherWorkspace() {
               </div>
 
               <div className="panel-footer">
-                <span>설정은 질문 공개 전까지 수정할 수 있습니다.</span>
-                <button className="button primary" onClick={createRoom}>
+                <button
+                  className="button primary"
+                  onClick={createRoom}
+                  disabled={
+                    !config.subject.trim() ||
+                    !config.title.trim() ||
+                    !config.question.trim() ||
+                    !config.password.trim()
+                  }
+                >
                   룸 생성하기 →
                 </button>
               </div>
@@ -668,9 +831,6 @@ export function TeacherWorkspace() {
                     <span className="eyebrow">LIVE ROSTER</span>
                     <h2>학생 참여 현황</h2>
                   </div>
-                  <button className="button secondary" onClick={loadDemo}>
-                    가상 학생 30명 불러오기
-                  </button>
                 </div>
                 <div className="progress-track">
                   <span
@@ -729,7 +889,7 @@ export function TeacherWorkspace() {
                 ) : (
                   <div className="empty-state">
                     <b>아직 입장한 학생이 없습니다.</b>
-                    <p>링크를 공유하거나 데모 학생을 불러와 전체 흐름을 확인하세요.</p>
+                    <p>학생 링크를 공유해 주세요.</p>
                   </div>
                 )}
                 <div className="action-bar">
@@ -765,7 +925,6 @@ export function TeacherWorkspace() {
                 <div>
                   <span className="eyebrow">SNAPSHOT LOCKED</span>
                   <h1>응답 분석을 시작할까요?</h1>
-                  <p>현재 명단과 답변을 고정했습니다. 이후 입장 학생은 교사 승인 대기 상태가 됩니다.</p>
                 </div>
                 <span className="source-chip">Gemini + 임베딩</span>
               </div>
@@ -775,28 +934,10 @@ export function TeacherWorkspace() {
                 <StatCard label="정보 확인 필요" value={`${participants.length - answered.length}명`} tone="warn" />
                 <StatCard label="생성할 팀" value={`${Math.ceil(participants.length / config.targetTeamSize)}팀`} tone="blue" />
               </div>
-              <div className="process-preview">
-                {[
-                  ["1", "질문별 분석", "룸 기준으로 정보 포함 정도를 구조화"],
-                  ["2", "대표 Seed", "겹치지 않는 상위 아이디어 선택"],
-                  ["3", "정원 배정", "Seed 유사도와 팀별 목표 인원 적용"],
-                  ["4", "균형 보완", "정보 부족 학생을 재현 가능한 방식으로 배정"],
-                ].map(([number, title, description]) => (
-                  <article key={number}>
-                    <span>{number}</span>
-                    <strong>{title}</strong>
-                    <p>{description}</p>
-                  </article>
-                ))}
-              </div>
-              <div className="approval-callout">
-                <span>교사 승인 원칙</span>
-                <p>Seed 부족, 낮은 유사도, 권장 인원 초과는 자동 확정하지 않고 결과 화면에서 확인을 요청합니다.</p>
-              </div>
               <div className="panel-footer">
                 <button
                   className="button secondary"
-                  onClick={() => setPhase("collecting")}
+                  onClick={openQuestion}
                 >
                   응답 수집 다시 열기
                 </button>
@@ -817,7 +958,6 @@ export function TeacherWorkspace() {
                 <div>
                   <span className="eyebrow">TEACHER REVIEW</span>
                   <h1>팀 추천안을 검토해 주세요</h1>
-                  <p>학생 이동 시 의미 유사도보다 교사의 판단이 우선하며, 변경 이력은 승인 결과로 간주합니다.</p>
                 </div>
                 <span className={`source-chip ${matchResult.source}`}>
                   {matchResult.source === "gemini"
@@ -965,17 +1105,14 @@ export function TeacherWorkspace() {
                 </div>
                 <button
                   className="button secondary"
-                  onClick={() => setPhase("analyzing")}
+                  onClick={returnToAnalysis}
                 >
                   다시 분석
                 </button>
                 <button
                   className="button primary"
                   disabled={!canConfirm}
-                  onClick={() => {
-                    setPhase("completed");
-                    setNotice("팀 구성을 확정했습니다. 이제 학생 화면에 결과를 공개할 수 있습니다.");
-                  }}
+                  onClick={completeMatching}
                 >
                   팀 구성 확정
                 </button>
@@ -988,7 +1125,6 @@ export function TeacherWorkspace() {
               <div className="success-mark">✓</div>
               <span className="eyebrow">MATCHING COMPLETE</span>
               <h1>{matchResult.summary.teamCount}개 팀 구성이 확정되었습니다</h1>
-              <p>학생에게는 자신의 팀, 팀원, 대표 아이디어만 공개되며 점수와 분석 사유는 표시되지 않습니다.</p>
               <div className="completion-grid">
                 {matchResult.teams.map((team) => (
                   <article key={team.id}>

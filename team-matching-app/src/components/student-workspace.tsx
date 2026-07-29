@@ -1,9 +1,26 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppHeader } from "@/components/app-header";
 
 type StudentPhase = "join" | "waiting" | "answer" | "submitted" | "result";
+
+type StudentRoomSnapshot = {
+  participantCount: number;
+  room: {
+    subject: string;
+    title: string;
+    className: string | null;
+    question: string;
+    phase: string;
+  };
+  participant?: {
+    number: string;
+    name: string;
+    answer: string;
+    submitted: boolean;
+  };
+};
 
 export function StudentWorkspace({
   initialRoomCode = "",
@@ -12,7 +29,7 @@ export function StudentWorkspace({
 }) {
   const [phase, setPhase] = useState<StudentPhase>("join");
   const [roomCode, setRoomCode] = useState(initialRoomCode.toUpperCase());
-  const [password, setPassword] = useState("class24");
+  const [password, setPassword] = useState("");
   const [name, setName] = useState("");
   const [answer, setAnswer] = useState("");
   const [participantCount, setParticipantCount] = useState(0);
@@ -25,6 +42,55 @@ export function StudentWorkspace({
     question: string;
   } | null>(null);
 
+  const applyRoomSnapshot = useCallback((data: StudentRoomSnapshot) => {
+    setParticipantCount(data.participantCount);
+    setRoom(data.room);
+    if (data.participant) {
+      setName(
+        [data.participant.number, data.participant.name]
+          .filter(Boolean)
+          .join(" "),
+      );
+      setAnswer(data.participant.answer);
+    }
+
+    if (data.room.phase === "completed") {
+      setPhase("result");
+    } else if (data.room.phase === "collecting") {
+      setPhase(data.participant?.submitted ? "submitted" : "answer");
+    } else if (
+      ["locked", "analyzing", "review"].includes(data.room.phase)
+    ) {
+      setPhase("submitted");
+    } else {
+      setPhase("waiting");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!initialRoomCode) return;
+
+    let cancelled = false;
+    async function restoreSession() {
+      try {
+        const response = await fetch(
+          `/api/rooms/${initialRoomCode.toUpperCase()}`,
+          { cache: "no-store" },
+        );
+        if (!response.ok) return;
+        const data = (await response.json()) as StudentRoomSnapshot;
+        if (!cancelled) applyRoomSnapshot(data);
+      } catch {
+        // 입장 화면에서 다시 시도할 수 있습니다.
+      }
+    }
+
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyRoomSnapshot, initialRoomCode]);
+
   useEffect(() => {
     if (phase === "join") return;
 
@@ -35,25 +101,9 @@ export function StudentWorkspace({
           cache: "no-store",
         });
         if (!response.ok) return;
-        const data = (await response.json()) as {
-          participantCount: number;
-          room: {
-            subject: string;
-            title: string;
-            className: string | null;
-            question: string;
-            phase: string;
-          };
-        };
+        const data = (await response.json()) as StudentRoomSnapshot;
         if (cancelled) return;
-        setParticipantCount(data.participantCount);
-        setRoom(data.room);
-        if (data.room.phase === "collecting" && phase === "waiting") {
-          setPhase("answer");
-        }
-        if (data.room.phase === "completed") {
-          setPhase("result");
-        }
+        applyRoomSnapshot(data);
       } catch {
         // 다음 polling 주기에서 다시 시도합니다.
       }
@@ -65,7 +115,7 @@ export function StudentWorkspace({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [phase, roomCode]);
+  }, [applyRoomSnapshot, phase, roomCode]);
 
   async function joinRoom() {
     setLoading(true);
@@ -159,7 +209,6 @@ export function StudentWorkspace({
             <span className="student-icon">↗</span>
             <span className="eyebrow">JOIN A ROOM</span>
             <h1>수업 룸에 입장하세요</h1>
-            <p>교사가 공유한 룸 코드와 참여 암호를 입력합니다.</p>
             <div className="student-form">
               <label>
                 룸 코드
@@ -172,6 +221,7 @@ export function StudentWorkspace({
                 참여 암호
                 <input
                   type="password"
+                  placeholder="교사가 안내한 암호"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                 />
@@ -215,7 +265,6 @@ export function StudentWorkspace({
             <div className="room-summary">
               <span>현재 입장</span>
               <strong>{participantCount}명</strong>
-              <small>화면은 자동으로 갱신됩니다.</small>
             </div>
           </section>
         ) : null}
@@ -227,7 +276,6 @@ export function StudentWorkspace({
               <small>최대 500자</small>
             </div>
             <h1>{room?.question ?? "교사의 질문을 불러오는 중입니다."}</h1>
-            <p>짧더라도 자신의 관심 주제와 방향이 드러나면 충분합니다.</p>
             <textarea
               rows={8}
               placeholder="예: 급식실에서 버려지는 음식이 많아서, 학생이 먹을 양을 미리 선택하는 서비스를 만들고 싶어요."
@@ -237,7 +285,6 @@ export function StudentWorkspace({
             />
             <div className="answer-meta">
               <span>{answer.length} / 500자</span>
-              <span>빈 답변도 제출할 수 있습니다.</span>
             </div>
             <button
               className="button primary full"
