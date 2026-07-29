@@ -24,11 +24,6 @@ export function AppHeader({
           <small>{subtitle}</small>
         </div>
       </div>
-      <nav className="header-links">
-        <Link href={role === "교사" ? "/student" : "/teacher"}>
-          {role === "교사" ? "학생 화면 보기" : "교사 화면 보기"}
-        </Link>
-      </nav>
     </header>
   );
 }

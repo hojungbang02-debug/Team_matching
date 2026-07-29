@@ -11,7 +11,7 @@ import { getSupabaseAdmin } from "@/lib/supabase/server";
 const JoinSchema = z.object({
   password: z.string().min(1).max(100),
   name: z.string().trim().min(1).max(80),
-  number: z.string().trim().max(30).optional(),
+  number: z.string().trim().min(1).max(30),
 });
 
 export async function POST(
@@ -42,7 +42,7 @@ export async function POST(
   }
 
   const token = createSessionToken();
-  const normalizedIdentifier = `${parsed.data.number ?? ""}:${parsed.data.name}`
+  const normalizedIdentifier = `${parsed.data.number}:${parsed.data.name}`
     .normalize("NFKC")
     .trim()
     .toLowerCase();
@@ -51,7 +51,7 @@ export async function POST(
     .insert({
       room_id: room.id,
       display_name: parsed.data.name,
-      student_number: parsed.data.number || null,
+      student_number: parsed.data.number,
       normalized_identifier: normalizedIdentifier,
       session_token_hash: hashSessionToken(token),
       status: "active",

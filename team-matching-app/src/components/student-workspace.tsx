@@ -49,7 +49,8 @@ export function StudentWorkspace({
   const [phase, setPhase] = useState<StudentPhase>("join");
   const [roomCode, setRoomCode] = useState(initialRoomCode.toUpperCase());
   const [password, setPassword] = useState("");
-  const [name, setName] = useState("");
+  const [studentNumber, setStudentNumber] = useState("");
+  const [studentName, setStudentName] = useState("");
   const [answer, setAnswer] = useState("");
   const [participantCount, setParticipantCount] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
@@ -71,11 +72,8 @@ export function StudentWorkspace({
       setParticipantCount(data.participantCount);
       setRoom(data.room);
       if (data.participant) {
-        setName(
-          [data.participant.number, data.participant.name]
-            .filter(Boolean)
-            .join(" "),
-        );
+        setStudentNumber(data.participant.number);
+        setStudentName(data.participant.name);
 
         if (data.participant.submitted) {
           setAnswer(data.participant.answer);
@@ -197,15 +195,13 @@ export function StudentWorkspace({
     setLoading(true);
     setNotice(null);
     try {
-      const trimmed = name.trim();
-      const match = trimmed.match(/^(\S+)\s+(.+)$/);
       const response = await fetch(`/api/rooms/${roomCode}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           password,
-          number: match?.[1] ?? "",
-          name: match?.[2] ?? trimmed,
+          number: studentNumber,
+          name: studentName,
         }),
       });
       const data = (await response.json()) as {
@@ -325,11 +321,21 @@ export function StudentWorkspace({
                 />
               </label>
               <label>
-                이름 또는 학번
+                학번
                 <input
-                  placeholder="예: 17 이서준"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
+                  placeholder="예: 17"
+                  maxLength={30}
+                  value={studentNumber}
+                  onChange={(event) => setStudentNumber(event.target.value)}
+                />
+              </label>
+              <label>
+                이름
+                <input
+                  placeholder="예: 이서준"
+                  maxLength={80}
+                  value={studentName}
+                  onChange={(event) => setStudentName(event.target.value)}
                 />
               </label>
             </div>
@@ -337,7 +343,8 @@ export function StudentWorkspace({
               className="button primary full"
               disabled={
                 loading ||
-                !name.trim() ||
+                !studentNumber.trim() ||
+                !studentName.trim() ||
                 !roomCode.trim() ||
                 !password.trim()
               }
@@ -358,7 +365,7 @@ export function StudentWorkspace({
               <span />
             </div>
             <span className="eyebrow">YOU&apos;RE IN</span>
-            <h1>{name || "학생"}님, 입장했습니다</h1>
+            <h1>{studentName || "학생"}님, 입장했습니다</h1>
             <p>교사가 질문을 공개할 때까지 이 화면에서 기다려 주세요.</p>
             <div className="room-summary">
               <span>현재 입장</span>

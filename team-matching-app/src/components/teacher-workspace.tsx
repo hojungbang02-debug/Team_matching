@@ -121,6 +121,16 @@ type ConfirmedResult = {
   pending: { id: string; number: string; name: string }[];
 };
 
+function getAnswerStatus(participant: ParticipantInput) {
+  if (!participant.submitted) {
+    return { label: "미제출", className: "missing" };
+  }
+  if (!participant.answer.trim()) {
+    return { label: "빈 답변", className: "empty" };
+  }
+  return { label: "제출", className: "submitted" };
+}
+
 function Field({
   label,
   children,
@@ -176,6 +186,8 @@ export function TeacherWorkspace() {
   const [stateRestored, setStateRestored] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
+  const [answersOpen, setAnswersOpen] = useState(false);
+  const [answerSearch, setAnswerSearch] = useState("");
   const [resumeRoom, setResumeRoom] = useState<ResumeRoom | null>(null);
   const [confirmedResult, setConfirmedResult] =
     useState<ConfirmedResult | null>(null);
@@ -186,6 +198,7 @@ export function TeacherWorkspace() {
   const answered = participants.filter(
     (participant) => participant.answer.trim().length > 0,
   );
+  const canViewAnswers = ["analyzing", "review", "completed"].includes(phase);
   const calculatedTeamCount = Math.max(
     1,
     config.teamMode === "fixed"
@@ -786,6 +799,21 @@ export function TeacherWorkspace() {
       ),
     [participants],
   );
+  const filteredAnswerParticipants = useMemo(() => {
+    const query = answerSearch.normalize("NFKC").trim().toLowerCase();
+    if (!query) return participants;
+    return participants.filter((participant) =>
+      `${participant.number} ${participant.name}`
+        .normalize("NFKC")
+        .toLowerCase()
+        .includes(query),
+    );
+  }, [answerSearch, participants]);
+
+  function closeAnswersDialog() {
+    setAnswersOpen(false);
+    setAnswerSearch("");
+  }
 
   return (
     <div className="app-shell">
@@ -831,9 +859,19 @@ export function TeacherWorkspace() {
               })}
             </ol>
             {phase !== "setup" ? (
-              <button className="new-room-button" onClick={startNewRoom}>
-                ＋ 새 룸 만들기
-              </button>
+              <div className="sidebar-actions">
+                {canViewAnswers ? (
+                  <button
+                    className="new-room-button"
+                    onClick={() => setAnswersOpen(true)}
+                  >
+                    학생 답변 보기
+                  </button>
+                ) : null}
+                <button className="new-room-button" onClick={startNewRoom}>
+                  ＋ 새 룸 만들기
+                </button>
+              </div>
             ) : null}
           </aside>
         ) : null}
@@ -841,6 +879,14 @@ export function TeacherWorkspace() {
         <main className="workspace-main">
           {phase !== "setup" ? (
             <div className="mobile-room-actions">
+              {canViewAnswers ? (
+                <button
+                  className="button secondary"
+                  onClick={() => setAnswersOpen(true)}
+                >
+                  학생 답변 보기
+                </button>
+              ) : null}
               <button className="button secondary" onClick={startNewRoom}>
                 ＋ 새 룸 만들기
               </button>
@@ -1645,6 +1691,85 @@ export function TeacherWorkspace() {
             ) : null}
             <b className="qr-room-code">{roomCode}</b>
             <p>참여 암호는 학생에게 별도로 안내해 주세요.</p>
+          </section>
+        </div>
+      ) : null}
+      {answersOpen && canViewAnswers ? (
+        <div
+          className="qr-backdrop answers-backdrop"
+          role="presentation"
+          onClick={closeAnswersDialog}
+        >
+          <section
+            className="answers-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="answers-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="qr-close"
+              onClick={closeAnswersDialog}
+              aria-label="학생 답변 닫기"
+            >
+              ×
+            </button>
+            <header className="answers-dialog-header">
+              <span className="eyebrow">STUDENT RESPONSES</span>
+              <h2 id="answers-dialog-title">학생 답변 보기</h2>
+              <p>
+                제출 여부와 학생이 작성한 원문 답변을 확인할 수 있습니다.
+              </p>
+            </header>
+            <label className="answers-search">
+              <span>학생 검색</span>
+              <input
+                type="search"
+                placeholder="이름 또는 학번 입력"
+                value={answerSearch}
+                onChange={(event) => setAnswerSearch(event.target.value)}
+                autoFocus
+              />
+            </label>
+            <div className="answers-list-summary">
+              <span>
+                전체 {participants.length}명 · 검색 결과{" "}
+                {filteredAnswerParticipants.length}명
+              </span>
+            </div>
+            <div className="answers-list">
+              {filteredAnswerParticipants.length ? (
+                filteredAnswerParticipants.map((participant) => {
+                  const status = getAnswerStatus(participant);
+                  return (
+                    <article className="answer-row" key={participant.id}>
+                      <div className="answer-row-header">
+                        <div className="answer-student">
+                          <span>{participant.number || "학번 없음"}</span>
+                          <strong>{participant.name}</strong>
+                        </div>
+                        <span
+                          className={`answer-status ${status.className}`}
+                        >
+                          {status.label}
+                        </span>
+                      </div>
+                      <p className="answer-content">
+                        {participant.answer.trim()
+                          ? participant.answer
+                          : participant.submitted
+                            ? "빈 답변으로 제출했습니다."
+                            : "제출한 답변이 없습니다."}
+                      </p>
+                    </article>
+                  );
+                })
+              ) : (
+                <div className="answers-empty">
+                  검색 조건에 맞는 학생이 없습니다.
+                </div>
+              )}
+            </div>
           </section>
         </div>
       ) : null}
