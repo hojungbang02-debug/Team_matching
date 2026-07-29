@@ -1,6 +1,8 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import { AppHeader } from "@/components/app-header";
 import { defaultRubric } from "@/lib/demo-data";
 import type {
@@ -119,6 +121,8 @@ export function TeacherWorkspace() {
   const [notice, setNotice] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState<string | null>(null);
   const [stateRestored, setStateRestored] = useState(false);
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qrOpen, setQrOpen] = useState(false);
 
   const submitted = participants.filter(
     (participant) => participant.submitted,
@@ -383,6 +387,22 @@ export function TeacherWorkspace() {
     );
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1600);
+  }
+
+  async function showJoinQr() {
+    if (!roomCode) return;
+    const joinLink = `${window.location.origin}/student?room=${roomCode}`;
+    const dataUrl = await QRCode.toDataURL(joinLink, {
+      width: 360,
+      margin: 2,
+      errorCorrectionLevel: "M",
+      color: {
+        dark: "#172033",
+        light: "#ffffff",
+      },
+    });
+    setQrDataUrl(dataUrl);
+    setQrOpen(true);
   }
 
   async function saveRoomPhase(
@@ -795,9 +815,12 @@ export function TeacherWorkspace() {
                 <div className="join-code">
                   <span>룸 코드</span>
                   <b>{roomCode ?? "------"}</b>
-                  <button onClick={copyJoinLink}>
-                    {copied ? "복사됨 ✓" : "링크 복사"}
-                  </button>
+                  <div className="join-actions">
+                    <button onClick={copyJoinLink}>
+                      {copied ? "복사됨 ✓" : "링크 복사"}
+                    </button>
+                    <button onClick={showJoinQr}>QR 보기</button>
+                  </div>
                 </div>
               </div>
 
@@ -1156,6 +1179,43 @@ export function TeacherWorkspace() {
           ) : null}
         </main>
       </div>
+      {qrOpen ? (
+        <div
+          className="qr-backdrop"
+          role="presentation"
+          onClick={() => setQrOpen(false)}
+        >
+          <section
+            className="qr-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="qr-dialog-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="qr-close"
+              onClick={() => setQrOpen(false)}
+              aria-label="QR 닫기"
+            >
+              ×
+            </button>
+            <span className="eyebrow">STUDENT JOIN</span>
+            <h2 id="qr-dialog-title">학생 입장 QR</h2>
+            {qrDataUrl ? (
+              <Image
+                className="qr-image"
+                src={qrDataUrl}
+                alt={`${roomCode} 학생 입장 QR 코드`}
+                width={360}
+                height={360}
+                unoptimized
+              />
+            ) : null}
+            <b className="qr-room-code">{roomCode}</b>
+            <p>참여 암호는 학생에게 별도로 안내해 주세요.</p>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }
