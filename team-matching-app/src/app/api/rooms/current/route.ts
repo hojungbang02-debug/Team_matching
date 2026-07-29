@@ -14,7 +14,7 @@ export async function GET() {
   const supabase = getSupabaseAdmin();
   const { data: room } = await supabase
     .from("rooms")
-    .select("room_code")
+    .select("room_code, title, class_name, phase")
     .eq("id", session.id)
     .eq("teacher_token_hash", hashSessionToken(session.token))
     .maybeSingle();
@@ -26,5 +26,10 @@ export async function GET() {
     );
   }
 
-  return NextResponse.json({ code: room.room_code });
+  return NextResponse.json({
+    code: room.room_code,
+    title: room.title,
+    className: room.class_name,
+    phase: room.phase,
+  });
 }

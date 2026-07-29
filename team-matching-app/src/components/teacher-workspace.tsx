@@ -32,6 +32,15 @@ const phaseLabels: Record<RoomPhase, string> = {
   completed: "확정",
 };
 
+const savedPhaseLabels: Record<string, string> = {
+  waiting: "입장 대기",
+  collecting: "응답 수집",
+  locked: "응답 마감",
+  analyzing: "분석",
+  review: "검토",
+  completed: "확정",
+};
+
 const initialConfig: RoomConfig = {
   subject: "",
   title: "",
@@ -66,6 +75,22 @@ type TeacherRoomSnapshot = {
     rubricSource: "gemini" | "teacher" | "demo-fallback";
   };
   participants?: ParticipantInput[];
+};
+
+type TeacherSavedState = {
+  roomCode: string;
+  phase: RoomPhase;
+  config: RoomConfig;
+  rubricSource: "default" | "gemini";
+  matchResult: MatchResult | null;
+  approvals: string[];
+};
+
+type ResumeRoom = {
+  code: string;
+  title: string;
+  className: string | null;
+  phase: string;
 };
 
 function Field({
@@ -123,6 +148,7 @@ export function TeacherWorkspace() {
   const [stateRestored, setStateRestored] = useState(false);
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrOpen, setQrOpen] = useState(false);
+  const [resumeRoom, setResumeRoom] = useState<ResumeRoom | null>(null);
 
   const submitted = participants.filter(
     (participant) => participant.submitted,
@@ -163,42 +189,31 @@ export function TeacherWorkspace() {
           return;
         }
         const saved = window.localStorage.getItem(TEACHER_STATE_KEY);
-        if (saved) {
-          const snapshot = JSON.parse(saved) as {
-            roomCode: string;
-            phase: RoomPhase;
-            config: RoomConfig;
-            rubricSource: "default" | "gemini";
-            matchResult: MatchResult | null;
-            approvals: string[];
-          };
-          if (!urlCode || snapshot.roomCode === urlCode) {
-            setRoomCode(snapshot.roomCode);
-            setPhase(snapshot.phase);
-            setConfig({ ...snapshot.config, password: "" });
-            setRubricSource(snapshot.rubricSource);
-            setMatchResult(snapshot.matchResult);
-            setApprovals(snapshot.approvals);
+        if (urlCode) {
+          if (saved) {
+            const snapshot = JSON.parse(saved) as TeacherSavedState;
+            if (snapshot.roomCode === urlCode) {
+              setRoomCode(snapshot.roomCode);
+              setPhase(snapshot.phase);
+              setConfig({ ...snapshot.config, password: "" });
+              setRubricSource(snapshot.rubricSource);
+              setMatchResult(snapshot.matchResult);
+              setApprovals(snapshot.approvals);
+            } else {
+              setRoomCode(urlCode);
+              setPhase("waiting");
+            }
           } else {
             setRoomCode(urlCode);
             setPhase("waiting");
           }
-        } else if (urlCode) {
-          setRoomCode(urlCode);
-          setPhase("waiting");
         } else {
           const response = await fetch("/api/rooms/current", {
             cache: "no-store",
           });
           if (response.ok) {
-            const data = (await response.json()) as { code: string };
-            setRoomCode(data.code);
-            setPhase("waiting");
-            window.history.replaceState(
-              null,
-              "",
-              `/teacher?room=${data.code}`,
-            );
+            const data = (await response.json()) as ResumeRoom;
+            setResumeRoom(data);
           }
         }
       } catch {
@@ -384,14 +399,10 @@ export function TeacherWorkspace() {
     }
   }
 
-  function startNewRoom() {
-    const confirmed = window.confirm(
-      "새 룸을 만들까요? 기존 룸 데이터는 삭제되지 않습니다.",
-    );
-    if (!confirmed) return;
-
+  function resetForNewRoom() {
     window.localStorage.removeItem(TEACHER_STATE_KEY);
     window.history.replaceState(null, "", "/teacher?new=1");
+    setResumeRoom(null);
     setRoomCode(null);
     setPhase("setup");
     setConfig(initialConfig);
@@ -402,6 +413,44 @@ export function TeacherWorkspace() {
     setNotice(null);
     setQrDataUrl(null);
     setQrOpen(false);
+  }
+
+  function startNewRoom() {
+    const confirmed = window.confirm(
+      "새 룸을 만들까요? 기존 룸 데이터는 삭제되지 않습니다.",
+    );
+    if (confirmed) resetForNewRoom();
+  }
+
+  function resumeExistingRoom() {
+    if (!resumeRoom) return;
+    try {
+      const saved = window.localStorage.getItem(TEACHER_STATE_KEY);
+      const snapshot = saved
+        ? (JSON.parse(saved) as TeacherSavedState)
+        : null;
+      if (snapshot?.roomCode === resumeRoom.code) {
+        setRoomCode(snapshot.roomCode);
+        setPhase(snapshot.phase);
+        setConfig({ ...snapshot.config, password: "" });
+        setRubricSource(snapshot.rubricSource);
+        setMatchResult(snapshot.matchResult);
+        setApprovals(snapshot.approvals);
+      } else {
+        setRoomCode(resumeRoom.code);
+        setPhase("waiting");
+      }
+    } catch {
+      window.localStorage.removeItem(TEACHER_STATE_KEY);
+      setRoomCode(resumeRoom.code);
+      setPhase("waiting");
+    }
+    window.history.replaceState(
+      null,
+      "",
+      `/teacher?room=${resumeRoom.code}`,
+    );
+    setResumeRoom(null);
   }
 
   async function copyJoinLink() {
@@ -557,44 +606,52 @@ export function TeacherWorkspace() {
     <div className="app-shell">
       <AppHeader
         role="교사"
-        title={config.title}
+        title={resumeRoom?.title ?? config.title}
         subtitle={
-          phase === "setup"
-            ? "새로운 수업 룸"
-            : `${config.className} · ${roomCode ?? "룸 생성 중"}`
+          resumeRoom
+            ? "시작할 작업 선택"
+            : phase === "setup"
+              ? "새로운 수업 룸"
+              : `${config.className} · ${roomCode ?? "룸 생성 중"}`
         }
       />
-      <div className="workspace">
-        <aside className="step-sidebar">
-          <div className="sidebar-title">
-            <span>진행 단계</span>
-            <b>{phaseLabels[phase]}</b>
-          </div>
-          <ol>
-            {phaseOrder.map((item, index) => {
-              const currentIndex = phaseOrder.indexOf(phase);
-              const state =
-                index < currentIndex
-                  ? "done"
-                  : index === currentIndex
-                    ? "active"
-                    : "pending";
-              return (
-                <li key={item} className={state}>
-                  <span>{state === "done" ? "✓" : index + 1}</span>
-                  <div>
-                    <strong>{phaseLabels[item]}</strong>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-          {phase !== "setup" ? (
-            <button className="new-room-button" onClick={startNewRoom}>
-              ＋ 새 룸 만들기
-            </button>
-          ) : null}
-        </aside>
+      <div
+        className={`workspace ${
+          !stateRestored || resumeRoom ? "choice-workspace" : ""
+        }`}
+      >
+        {stateRestored && !resumeRoom ? (
+          <aside className="step-sidebar">
+            <div className="sidebar-title">
+              <span>진행 단계</span>
+              <b>{phaseLabels[phase]}</b>
+            </div>
+            <ol>
+              {phaseOrder.map((item, index) => {
+                const currentIndex = phaseOrder.indexOf(phase);
+                const state =
+                  index < currentIndex
+                    ? "done"
+                    : index === currentIndex
+                      ? "active"
+                      : "pending";
+                return (
+                  <li key={item} className={state}>
+                    <span>{state === "done" ? "✓" : index + 1}</span>
+                    <div>
+                      <strong>{phaseLabels[item]}</strong>
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+            {phase !== "setup" ? (
+              <button className="new-room-button" onClick={startNewRoom}>
+                ＋ 새 룸 만들기
+              </button>
+            ) : null}
+          </aside>
+        ) : null}
 
         <main className="workspace-main">
           {phase !== "setup" ? (
@@ -613,7 +670,50 @@ export function TeacherWorkspace() {
             </div>
           ) : null}
 
-          {phase === "setup" ? (
+          {!stateRestored ? (
+            <section className="panel room-choice-panel">
+              <span className="eyebrow">TEACHER ROOM</span>
+              <h1>교사 룸을 확인하고 있습니다…</h1>
+            </section>
+          ) : null}
+
+          {resumeRoom ? (
+            <section className="panel room-choice-panel">
+              <span className="eyebrow">TEACHER ROOM</span>
+              <h1>어떻게 시작할까요?</h1>
+              <div className="resume-room-card">
+                <div>
+                  <span>최근 룸</span>
+                  <strong>{resumeRoom.title}</strong>
+                  <small>
+                    {resumeRoom.className
+                      ? `${resumeRoom.className} · `
+                      : ""}
+                    {resumeRoom.code}
+                  </small>
+                </div>
+                <span className="status submitted">
+                  {savedPhaseLabels[resumeRoom.phase] ?? resumeRoom.phase}
+                </span>
+              </div>
+              <div className="room-choice-actions">
+                <button
+                  className="button secondary"
+                  onClick={resumeExistingRoom}
+                >
+                  기존 룸 이어하기
+                </button>
+                <button
+                  className="button primary"
+                  onClick={resetForNewRoom}
+                >
+                  새 룸 만들기
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          {stateRestored && phase === "setup" && !resumeRoom ? (
             <section className="panel setup-panel">
               <div className="panel-heading">
                 <div>
