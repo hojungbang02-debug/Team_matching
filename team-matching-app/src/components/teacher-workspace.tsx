@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { AppHeader } from "@/components/app-header";
 import { defaultRubric } from "@/lib/matching-defaults";
+import { canFormNonEmptyTeams } from "@/lib/matching";
 import type {
   Criterion,
   MatchResult,
@@ -380,6 +381,17 @@ export function TeacherWorkspace() {
 
   async function createRoom() {
     setNotice(null);
+    if (
+      config.teamMode === "fixed" &&
+      config.expectedCount &&
+      !canFormNonEmptyTeams(
+        config.expectedCount,
+        config.fixedTeamCount ?? 0,
+      )
+    ) {
+      setNotice("팀 수는 예상 학생 수보다 많을 수 없습니다.");
+      return;
+    }
     try {
       const roomConfig = withDerivedTeamLimits(config);
       setConfig(roomConfig);
@@ -553,6 +565,18 @@ export function TeacherWorkspace() {
   }
 
   async function runMatching() {
+    if (
+      config.teamMode === "fixed" &&
+      !canFormNonEmptyTeams(
+        participants.length,
+        config.fixedTeamCount ?? 0,
+      )
+    ) {
+      setNotice(
+        `현재 참가자는 ${participants.length}명입니다. 팀 수를 ${participants.length}개 이하로 설정해 주세요.`,
+      );
+      return;
+    }
     setMatchLoading(true);
     setNotice(null);
     try {
@@ -899,10 +923,18 @@ export function TeacherWorkspace() {
                 </div>
                 <div className="form-grid two">
                   {config.teamMode === "fixed" ? (
-                    <Field label="팀 수">
+                    <Field
+                      label="팀 수"
+                      hint={
+                        config.expectedCount
+                          ? `최대 ${config.expectedCount}팀`
+                          : undefined
+                      }
+                    >
                       <input
                         type="number"
                         min={1}
+                        max={config.expectedCount}
                         placeholder="예: 3"
                         value={config.fixedTeamCount || ""}
                         onChange={(event) =>
@@ -956,7 +988,15 @@ export function TeacherWorkspace() {
                     !config.title.trim() ||
                     !config.question.trim() ||
                     !config.password.trim() ||
-                    (config.teamMode === "fixed" && !config.fixedTeamCount)
+                    (config.teamMode === "fixed" &&
+                      (!config.fixedTeamCount ||
+                        Boolean(
+                          config.expectedCount &&
+                            !canFormNonEmptyTeams(
+                              config.expectedCount,
+                              config.fixedTeamCount,
+                            ),
+                        )))
                   }
                 >
                   룸 생성하기 →

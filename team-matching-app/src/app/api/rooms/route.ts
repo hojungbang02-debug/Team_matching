@@ -7,6 +7,7 @@ import {
   hashSessionToken,
   setTeacherSession,
 } from "@/lib/session";
+import { canFormNonEmptyTeams } from "@/lib/matching";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 
 const CriterionSchema = z.object({
@@ -16,21 +17,41 @@ const CriterionSchema = z.object({
   weight: z.number().min(0).max(1),
 });
 
-const CreateRoomSchema = z.object({
-  subject: z.string().trim().min(1).max(80),
-  title: z.string().trim().min(1).max(120),
-  className: z.string().trim().max(80),
-  question: z.string().trim().min(5).max(1000),
-  expectedCount: z.number().int().positive().optional(),
-  teamMode: z.enum(["auto", "fixed"]),
-  fixedTeamCount: z.number().int().positive().optional(),
-  targetTeamSize: z.number().int().min(2).max(12),
-  recommendedMax: z.number().int().min(2).max(12),
-  hardMax: z.number().int().min(2).max(12),
-  password: z.string().min(4).max(100),
-  rubric: z.array(CriterionSchema).min(1).max(6),
-  rubricSource: z.enum(["gemini", "teacher", "demo-fallback"]),
-});
+const CreateRoomSchema = z
+  .object({
+    subject: z.string().trim().min(1).max(80),
+    title: z.string().trim().min(1).max(120),
+    className: z.string().trim().max(80),
+    question: z.string().trim().min(5).max(1000),
+    expectedCount: z.number().int().positive().optional(),
+    teamMode: z.enum(["auto", "fixed"]),
+    fixedTeamCount: z.number().int().positive().optional(),
+    targetTeamSize: z.number().int().min(2).max(12),
+    recommendedMax: z.number().int().min(2).max(12),
+    hardMax: z.number().int().min(2).max(12),
+    password: z.string().min(4).max(100),
+    rubric: z.array(CriterionSchema).min(1).max(6),
+    rubricSource: z.enum(["gemini", "teacher", "demo-fallback"]),
+  })
+  .superRefine((data, context) => {
+    if (data.teamMode !== "fixed") return;
+    if (!data.fixedTeamCount) {
+      context.addIssue({
+        code: "custom",
+        path: ["fixedTeamCount"],
+        message: "고정 팀 수가 필요합니다.",
+      });
+    } else if (
+      data.expectedCount &&
+      !canFormNonEmptyTeams(data.expectedCount, data.fixedTeamCount)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["fixedTeamCount"],
+        message: "팀 수는 예상 학생 수보다 많을 수 없습니다.",
+      });
+    }
+  });
 
 const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 

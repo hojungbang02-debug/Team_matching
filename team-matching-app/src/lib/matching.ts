@@ -9,6 +9,19 @@ import type {
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
+export function canFormNonEmptyTeams(
+  participantCount: number,
+  teamCount: number,
+): boolean {
+  return (
+    Number.isInteger(participantCount) &&
+    Number.isInteger(teamCount) &&
+    participantCount > 0 &&
+    teamCount > 0 &&
+    teamCount <= participantCount
+  );
+}
+
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (!a.length || a.length !== b.length) return 0;
   let dot = 0;

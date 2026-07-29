@@ -7,12 +7,19 @@ import { testParticipants } from "./matching.fixtures";
 import {
   balancedCapacities,
   buildMatchResult,
+  canFormNonEmptyTeams,
   cosineSimilarity,
   deterministicVector,
   selectDiverseSeeds,
 } from "./matching";
 
 describe("matching utilities", () => {
+  it("rejects a team count that would create empty teams", () => {
+    expect(canFormNonEmptyTeams(10, 3)).toBe(true);
+    expect(canFormNonEmptyTeams(2, 5)).toBe(false);
+    expect(canFormNonEmptyTeams(0, 1)).toBe(false);
+  });
+
   it("creates balanced capacities whose sum equals the participant count", () => {
     const capacities = balancedCapacities(23, 5);
     expect(capacities).toEqual([5, 5, 5, 4, 4]);

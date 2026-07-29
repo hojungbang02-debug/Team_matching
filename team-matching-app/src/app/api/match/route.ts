@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { buildFallbackAnalyses } from "@/lib/matching-defaults";
 import { createGeminiClient } from "@/lib/gemini";
-import { buildMatchResult } from "@/lib/matching";
+import { buildMatchResult, canFormNonEmptyTeams } from "@/lib/matching";
 import { requireTeacherRoom } from "@/lib/rooms";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 import type { AnalyzedResponse, Criterion } from "@/lib/types";
@@ -27,14 +27,26 @@ const ParticipantSchema = z.object({
   submittedAt: z.string().optional(),
 });
 
-const RequestSchema = z.object({
-  question: z.string().min(5).max(1000),
-  rubric: z.array(CriterionSchema).min(1).max(6),
-  participants: z.array(ParticipantSchema).min(1).max(60),
-  requestedTeamCount: z.number().int().min(1).max(20),
-  hardMax: z.number().int().min(2).max(12),
-  roomCode: z.string().trim().min(6).max(12).optional(),
-});
+const RequestSchema = z
+  .object({
+    question: z.string().min(5).max(1000),
+    rubric: z.array(CriterionSchema).min(1).max(6),
+    participants: z.array(ParticipantSchema).min(1).max(60),
+    requestedTeamCount: z.number().int().min(1).max(20),
+    hardMax: z.number().int().min(2).max(12),
+    roomCode: z.string().trim().min(6).max(12).optional(),
+  })
+  .refine(
+    (data) =>
+      canFormNonEmptyTeams(
+        data.participants.length,
+        data.requestedTeamCount,
+      ),
+    {
+      path: ["requestedTeamCount"],
+      message: "팀 수는 참가자 수보다 많을 수 없습니다.",
+    },
+  );
 
 const LlmAnalysisSchema = z.object({
   analyses: z.array(
