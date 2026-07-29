@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { assignCapacityConstrained } from "./capacity-assignment";
 import {
   buildFallbackAnalyses,
   defaultRubric,
@@ -33,6 +34,19 @@ describe("matching utilities", () => {
     const second = deterministicVector("학교 급식 잔반 줄이기");
     expect(first).toEqual(second);
     expect(cosineSimilarity(first, second)).toBeCloseTo(1);
+  });
+
+  it("maximizes total similarity instead of getting trapped by greedy order", () => {
+    const scores = [
+      [0.9, 0.8],
+      [0.85, 0],
+    ];
+    const assignment = assignCapacityConstrained(
+      2,
+      [1, 1],
+      (student, team) => scores[student][team],
+    );
+    expect(assignment).toEqual([1, 0]);
   });
 
   it("selects distinct seeds and assigns every participant exactly once", () => {

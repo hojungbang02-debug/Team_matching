@@ -6,6 +6,7 @@ import type {
   SeedResult,
   TeamResult,
 } from "@/lib/types";
+import { assignCapacityConstrained } from "@/lib/capacity-assignment";
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
@@ -361,30 +362,28 @@ export function buildMatchResult({
           ? cosineSimilarity(analysis.embedding, seedAnalysis.embedding)
           : 0;
       });
-      return { analysis, scores, priority: Math.max(...scores, 0) };
+      return { analysis, scores };
     })
     .sort(
       (a, b) =>
-        b.priority - a.priority ||
-        b.analysis.informationScore - a.analysis.informationScore ||
         a.analysis.participantId.localeCompare(b.analysis.participantId),
     );
 
-  for (const item of validRemainder) {
-    const preferences = teams
-      .map((team, index) => ({ team, index, score: item.scores[index] }))
-      .filter(({ team, index }) => team.members.length < semanticCapacities[index])
-      .sort(
-        (a, b) =>
-          b.score - a.score ||
-          a.team.members.length - b.team.members.length ||
-          a.index - b.index,
-      );
-    const selected = preferences[0];
-    if (!selected) continue;
-    selected.team.members.push({
+  const remainingSemanticCapacities = teams.map((team, index) =>
+    Math.max(0, semanticCapacities[index] - team.members.length),
+  );
+  const optimizedAssignment = validRemainder.length
+    ? assignCapacityConstrained(
+        validRemainder.length,
+        remainingSemanticCapacities,
+        (student, team) => validRemainder[student].scores[team],
+      )
+    : [];
+  for (const [student, teamIndex] of optimizedAssignment.entries()) {
+    const item = validRemainder[student];
+    teams[teamIndex].members.push({
       participantId: item.analysis.participantId,
-      similarity: selected.score,
+      similarity: item.scores[teamIndex],
       matchingInformationScore: item.analysis.informationScore,
       matchingMethod: "semantic",
     });
