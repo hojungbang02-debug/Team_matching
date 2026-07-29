@@ -494,6 +494,27 @@ a {
   color: white;
 }
 
+.new-room-button {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 11px 14px;
+  background: white;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.new-room-button:hover {
+  border-color: #bdcae7;
+  background: var(--blue-soft);
+}
+
+.mobile-room-actions {
+  display: none;
+}
+
 .privacy-note {
   position: absolute;
   right: 22px;
@@ -1860,6 +1881,11 @@ a {
   .step-sidebar {
     position: static;
     display: none;
+  }
+
+  .mobile-room-actions {
+    display: flex;
+    justify-content: flex-end;
   }
 
   .rubric-grid,

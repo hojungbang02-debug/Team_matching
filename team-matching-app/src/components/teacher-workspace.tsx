@@ -154,10 +154,14 @@ export function TeacherWorkspace() {
     async function restoreState() {
       await Promise.resolve();
       if (cancelled) return;
-      const urlCode = new URLSearchParams(window.location.search)
-        .get("room")
-        ?.toUpperCase();
+      const searchParams = new URLSearchParams(window.location.search);
+      const urlCode = searchParams.get("room")?.toUpperCase();
+      const startFresh = searchParams.get("new") === "1";
       try {
+        if (startFresh) {
+          window.localStorage.removeItem(TEACHER_STATE_KEY);
+          return;
+        }
         const saved = window.localStorage.getItem(TEACHER_STATE_KEY);
         if (saved) {
           const snapshot = JSON.parse(saved) as {
@@ -380,6 +384,26 @@ export function TeacherWorkspace() {
     }
   }
 
+  function startNewRoom() {
+    const confirmed = window.confirm(
+      "새 룸을 만들까요? 기존 룸 데이터는 삭제되지 않습니다.",
+    );
+    if (!confirmed) return;
+
+    window.localStorage.removeItem(TEACHER_STATE_KEY);
+    window.history.replaceState(null, "", "/teacher?new=1");
+    setRoomCode(null);
+    setPhase("setup");
+    setConfig(initialConfig);
+    setParticipants([]);
+    setRubricSource("default");
+    setMatchResult(null);
+    setApprovals([]);
+    setNotice(null);
+    setQrDataUrl(null);
+    setQrOpen(false);
+  }
+
   async function copyJoinLink() {
     if (!roomCode) return;
     await navigator.clipboard.writeText(
@@ -558,16 +582,28 @@ export function TeacherWorkspace() {
               return (
                 <li key={item} className={state}>
                   <span>{state === "done" ? "✓" : index + 1}</span>
-                   <div>
-                     <strong>{phaseLabels[item]}</strong>
-                   </div>
+                  <div>
+                    <strong>{phaseLabels[item]}</strong>
+                  </div>
                 </li>
               );
             })}
           </ol>
+          {phase !== "setup" ? (
+            <button className="new-room-button" onClick={startNewRoom}>
+              ＋ 새 룸 만들기
+            </button>
+          ) : null}
         </aside>
 
         <main className="workspace-main">
+          {phase !== "setup" ? (
+            <div className="mobile-room-actions">
+              <button className="button secondary" onClick={startNewRoom}>
+                ＋ 새 룸 만들기
+              </button>
+            </div>
+          ) : null}
           {notice ? (
             <div className="notice-bar">
               <span>{notice}</span>
