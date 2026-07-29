@@ -8,6 +8,7 @@ import {
   setTeacherSession,
 } from "@/lib/session";
 import { canFormNonEmptyTeams } from "@/lib/matching";
+import { purgeExpiredRooms } from "@/lib/rooms";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 
 const CriterionSchema = z.object({
@@ -65,11 +66,25 @@ function createRoomCode(): string {
 export async function POST(request: Request) {
   const parsed = CreateRoomSchema.safeParse(await request.json());
   if (!parsed.success) {
+    const teamCountIssue = parsed.error.issues.find(
+      (issue) => issue.path[0] === "fixedTeamCount",
+    );
+    const detail = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
+      .join(", ");
+    console.error("Room create validation failed:", detail);
     return NextResponse.json(
-      { error: "룸 설정 값을 확인해 주세요." },
+      {
+        error: teamCountIssue?.message ?? "룸 설정 값을 확인해 주세요.",
+        details:
+          process.env.NODE_ENV === "development" ? detail : undefined,
+      },
       { status: 400 },
     );
   }
+
+  // 새 룸을 만드는 시점에 기한이 지난 룸을 정리합니다. 실패해도 룸 생성은 진행합니다.
+  await purgeExpiredRooms();
 
   const supabase = getSupabaseAdmin();
   const teacherToken = createSessionToken();

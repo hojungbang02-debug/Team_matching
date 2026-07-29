@@ -84,7 +84,8 @@ export async function POST(request: Request) {
       criteria: normalizeWeights(result.criteria),
       source: "gemini",
     });
-  } catch {
+  } catch (error) {
+    console.error("Gemini rubric suggestion failed:", error);
     return NextResponse.json({
       questionIntent: `${parsed.data.subject} 수업의 자유 주제 탐구`,
       matchingGoal: "비슷한 관심 주제와 접근 방향을 가진 학생 매칭",

@@ -137,6 +137,18 @@ a {
   color: var(--blue-deep);
 }
 
+.button.danger {
+  border-color: rgba(185, 63, 63, 0.28);
+  background: white;
+  color: var(--red);
+}
+
+.button.danger:hover:not(:disabled) {
+  background: var(--red);
+  border-color: var(--red);
+  color: white;
+}
+
 .button.large {
   min-height: 56px;
   border-radius: 16px;

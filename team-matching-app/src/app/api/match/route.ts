@@ -4,10 +4,19 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { buildFallbackAnalyses } from "@/lib/matching-defaults";
 import { createGeminiClient } from "@/lib/gemini";
-import { buildMatchResult, canFormNonEmptyTeams } from "@/lib/matching";
+import {
+  EMBEDDING_DIMENSIONS,
+  buildMatchResult,
+  canFormNonEmptyTeams,
+  hasEnoughMatchingInformation,
+} from "@/lib/matching";
 import { requireTeacherRoom } from "@/lib/rooms";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
-import type { AnalyzedResponse, Criterion } from "@/lib/types";
+import type {
+  AnalyzedResponse,
+  Criterion,
+  ParticipantInput,
+} from "@/lib/types";
 
 export const maxDuration = 60;
 
@@ -77,9 +86,25 @@ function scoreAnalysis(
   }, 0) / totalWeight;
 }
 
+type MatchPayload = Omit<z.infer<typeof RequestSchema>, "participants"> & {
+  participants: ParticipantInput[];
+};
+
+/** 임베딩에는 추출한 매칭 기준 값과 학생 원문을 함께 넣어 의미 공간을 넓힙니다. */
+function embeddingInput(
+  analysis: AnalyzedResponse,
+  answer: string,
+): string {
+  const structured = analysis.fields
+    .filter((field) => field.value)
+    .map((field) => `${field.label}: ${field.value}`)
+    .join("\n");
+  return [structured, answer].filter(Boolean).join("\n");
+}
+
 async function analyzeWithGemini(
   client: OpenAI,
-  data: z.infer<typeof RequestSchema>,
+  data: MatchPayload,
 ): Promise<AnalyzedResponse[]> {
   const response = await client.chat.completions.parse({
     model: process.env.GEMINI_ANALYSIS_MODEL || "gemini-3.6-flash",
@@ -114,54 +139,84 @@ async function analyzeWithGemini(
   const participantMap = new Map(
     data.participants.map((participant) => [participant.id, participant]),
   );
-  const analyses: AnalyzedResponse[] = parsedAnalysis.analyses.map(
-    (analysis) => {
-      const participant = participantMap.get(analysis.participantId);
-      const answer = participant?.answer.trim() ?? "";
-      const isEmpty = !answer;
-      const informationScore = isEmpty
-        ? 0
-        : scoreAnalysis(data.rubric, analysis.fields);
-      const fields = data.rubric.map((criterion) => {
-        const field = analysis.fields.find(
-          (item) => item.key === criterion.key,
-        );
-        return {
-          key: criterion.key,
-          label: criterion.label,
-          value: field?.value ?? null,
-          level: field?.level ?? 0,
-        };
-      });
-      return {
-        participantId: analysis.participantId,
-        fields,
-        informationScore,
-        isEmpty,
-        isOffTopic: !isEmpty && analysis.isOffTopic,
-        hasMatchingInformation:
-          !isEmpty && !analysis.isOffTopic && informationScore >= 0.35,
-        reason: analysis.reason,
-        embedding: [],
-      };
-    },
-  );
+  // 모델이 존재하지 않는 학생이나 같은 학생을 중복으로 돌려줄 수 있어 방어합니다.
+  const seen = new Set<string>();
+  const analyses: AnalyzedResponse[] = [];
+  for (const analysis of parsedAnalysis.analyses) {
+    const participant = participantMap.get(analysis.participantId);
+    if (!participant || seen.has(analysis.participantId)) continue;
+    seen.add(analysis.participantId);
 
+    const answer = participant.answer.trim();
+    const isEmpty = !answer;
+    const fields = data.rubric.map((criterion) => {
+      const field = analysis.fields.find(
+        (item) => item.key === criterion.key,
+      );
+      return {
+        key: criterion.key,
+        label: criterion.label,
+        value: isEmpty ? null : (field?.value ?? null),
+        level: isEmpty ? 0 : (field?.level ?? 0),
+      };
+    });
+    const informationScore = isEmpty
+      ? 0
+      : scoreAnalysis(data.rubric, analysis.fields);
+    const isOffTopic = !isEmpty && analysis.isOffTopic;
+    analyses.push({
+      participantId: analysis.participantId,
+      fields,
+      informationScore,
+      isEmpty,
+      isOffTopic,
+      hasMatchingInformation:
+        !isEmpty &&
+        !isOffTopic &&
+        hasEnoughMatchingInformation(informationScore, fields),
+      reason: analysis.reason,
+      embedding: [],
+    });
+  }
+
+  // 모델이 빠뜨린 학생도 결과에 남겨 인원 수와 저장 결과가 어긋나지 않게 합니다.
+  for (const participant of data.participants) {
+    if (seen.has(participant.id)) continue;
+    const isEmpty = !participant.answer.trim();
+    analyses.push({
+      participantId: participant.id,
+      fields: data.rubric.map((criterion) => ({
+        key: criterion.key,
+        label: criterion.label,
+        value: null,
+        level: 0,
+      })),
+      informationScore: 0,
+      isEmpty,
+      isOffTopic: false,
+      hasMatchingInformation: false,
+      reason: isEmpty
+        ? "제출된 답변이 없습니다."
+        : "AI 분석 결과를 받지 못해 인원 균형으로 배정합니다.",
+      embedding: [],
+    });
+  }
+
+  // 답변이 있고 주제에서 벗어나지 않았다면 정보량과 상관없이 임베딩합니다.
+  // 그래야 짧게 쓴 학생도 의미 기반 배정 대상이 됩니다.
   const embeddable = analyses.filter(
-    (analysis) =>
-      analysis.hasMatchingInformation &&
-      !analysis.isEmpty &&
-      !analysis.isOffTopic,
+    (analysis) => !analysis.isEmpty && !analysis.isOffTopic,
   );
   if (embeddable.length) {
     const embeddingResponse = await client.embeddings.create({
       model:
         process.env.GEMINI_EMBEDDING_MODEL || "gemini-embedding-001",
-      dimensions: 1536,
+      dimensions: EMBEDDING_DIMENSIONS,
       input: embeddable.map((analysis) =>
-        analysis.fields
-          .map((field) => `${field.label}: ${field.value ?? ""}`)
-          .join("\n"),
+        embeddingInput(
+          analysis,
+          participantMap.get(analysis.participantId)?.answer.trim() ?? "",
+        ),
       ),
     });
     embeddable.forEach((analysis, index) => {
@@ -171,9 +226,40 @@ async function analyzeWithGemini(
   return analyses;
 }
 
+/**
+ * 매칭 대상은 클라이언트가 보낸 값이 아니라 룸에 실제로 입장한 참가자를 기준으로 만듭니다.
+ */
+async function loadRoomParticipants(
+  roomId: string,
+): Promise<ParticipantInput[]> {
+  const supabase = getSupabaseAdmin();
+  const { data, error } = await supabase
+    .from("participants")
+    .select(
+      "id, student_number, display_name, responses(answer, submitted, submitted_at)",
+    )
+    .eq("room_id", roomId)
+    .in("status", ["active", "pending"])
+    .order("joined_at");
+  if (error) throw error;
+  return (data ?? []).map((row) => {
+    const response = Array.isArray(row.responses)
+      ? row.responses[0]
+      : row.responses;
+    return {
+      id: row.id as string,
+      number: (row.student_number as string | null) ?? "",
+      name: row.display_name as string,
+      answer: response?.answer ?? "",
+      submitted: response?.submitted ?? false,
+      submittedAt: response?.submitted_at ?? undefined,
+    };
+  });
+}
+
 async function persistMatchResult(
   room: { id: string },
-  data: z.infer<typeof RequestSchema>,
+  data: MatchPayload,
   result: ReturnType<typeof buildMatchResult>,
 ): Promise<string> {
   const supabase = getSupabaseAdmin();
@@ -246,7 +332,12 @@ async function persistMatchResult(
       is_off_topic: analysis.isOffTopic,
       has_matching_information: analysis.hasMatchingInformation,
       reason: analysis.reason,
-      embedding: analysis.embedding.length ? analysis.embedding : null,
+      // vector(1536) 컬럼이라 차원이 다르면 저장하지 않습니다.
+      // (기본 분석 대체 경로의 임베딩은 차원이 달라 저장 대상이 아닙니다.)
+      embedding:
+        analysis.embedding.length === EMBEDDING_DIMENSIONS
+          ? analysis.embedding
+          : null,
     }));
     if (analysisRows.some((row) => !row.response_id)) {
       throw new Error("저장할 응답 ID가 없습니다.");
@@ -324,8 +415,20 @@ async function persistMatchResult(
 export async function POST(request: Request) {
   const parsed = RequestSchema.safeParse(await request.json());
   if (!parsed.success) {
+    const teamCountIssue = parsed.error.issues.find(
+      (issue) => issue.path[0] === "requestedTeamCount",
+    );
+    const detail = parsed.error.issues
+      .map((issue) => `${issue.path.join(".") || "body"}: ${issue.message}`)
+      .join(", ");
+    console.error("Match request validation failed:", detail);
     return NextResponse.json(
-      { error: "팀 구성 요청 형식을 확인해 주세요." },
+      {
+        error:
+          teamCountIssue?.message ?? "팀 구성 요청 형식을 확인해 주세요.",
+        details:
+          process.env.NODE_ENV === "development" ? detail : undefined,
+      },
       { status: 400 },
     );
   }
@@ -340,40 +443,66 @@ export async function POST(request: Request) {
     );
   }
 
+  // 룸이 확인되면 답변과 명단을 서버에서 다시 읽어 클라이언트 값을 신뢰하지 않습니다.
+  let payload: MatchPayload = parsed.data;
+  if (teacherRoom) {
+    try {
+      const participants = await loadRoomParticipants(teacherRoom.id);
+      if (!participants.length) {
+        return NextResponse.json(
+          { error: "입장한 학생이 없어 팀을 만들 수 없습니다." },
+          { status: 400 },
+        );
+      }
+      if (
+        !canFormNonEmptyTeams(
+          participants.length,
+          parsed.data.requestedTeamCount,
+        )
+      ) {
+        return NextResponse.json(
+          {
+            error: `현재 참가자는 ${participants.length}명입니다. 팀 수는 참가자 수보다 많을 수 없습니다.`,
+          },
+          { status: 400 },
+        );
+      }
+      payload = { ...parsed.data, participants };
+    } catch (error) {
+      console.error("Loading room participants failed:", error);
+      return NextResponse.json(
+        { error: "참가자 명단을 불러오지 못했습니다." },
+        { status: 500 },
+      );
+    }
+  }
+
   let analyses: AnalyzedResponse[];
   let source: "gemini" | "demo-fallback" = "demo-fallback";
   if (process.env.GEMINI_API_KEY) {
     try {
       const client = createGeminiClient();
-      analyses = await analyzeWithGemini(client, parsed.data);
+      analyses = await analyzeWithGemini(client, payload);
       source = "gemini";
-    } catch {
-      analyses = buildFallbackAnalyses(
-        parsed.data.participants,
-        parsed.data.rubric,
-      );
+    } catch (error) {
+      console.error("Gemini analysis failed, using fallback:", error);
+      analyses = buildFallbackAnalyses(payload.participants, payload.rubric);
     }
   } else {
-    analyses = buildFallbackAnalyses(
-      parsed.data.participants,
-      parsed.data.rubric,
-    );
+    console.warn("GEMINI_API_KEY is not set. Using fallback analysis.");
+    analyses = buildFallbackAnalyses(payload.participants, payload.rubric);
   }
 
   const result = buildMatchResult({
-    participants: parsed.data.participants,
+    participants: payload.participants,
     analyses,
-    requestedTeamCount: parsed.data.requestedTeamCount,
-    hardMax: parsed.data.hardMax,
+    requestedTeamCount: payload.requestedTeamCount,
+    hardMax: payload.hardMax,
     source,
   });
   if (teacherRoom) {
     try {
-      const runId = await persistMatchResult(
-        teacherRoom,
-        parsed.data,
-        result,
-      );
+      const runId = await persistMatchResult(teacherRoom, payload, result);
       return NextResponse.json({ ...result, runId });
     } catch (error) {
       console.error("Matching result persistence failed:", error);

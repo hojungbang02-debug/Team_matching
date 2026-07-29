@@ -44,5 +44,31 @@ export async function PATCH(
   if (error) {
     return NextResponse.json({ error: "진행 단계 저장에 실패했습니다." }, { status: 500 });
   }
+
+  // 확정 시 가장 최근 매칭 실행을 완료 상태로 남깁니다. 실패해도 단계 저장은 유지합니다.
+  if (parsed.data.phase === "completed") {
+    try {
+      const { data: latestRun } = await supabase
+        .from("matching_runs")
+        .select("id")
+        .eq("room_id", room.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (latestRun) {
+        await supabase
+          .from("matching_runs")
+          .update({ status: "completed" })
+          .eq("id", latestRun.id);
+        await supabase
+          .from("teams")
+          .update({ is_confirmed: true })
+          .eq("matching_run_id", latestRun.id);
+      }
+    } catch (confirmError) {
+      console.error("Marking matching run completed failed:", confirmError);
+    }
+  }
+
   return NextResponse.json({ phase: parsed.data.phase });
 }

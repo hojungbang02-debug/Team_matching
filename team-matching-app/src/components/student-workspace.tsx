@@ -22,6 +22,14 @@ type StudentRoomSnapshot = {
   };
 };
 
+type StudentTeamResult = {
+  number: number;
+  name: string;
+  representativeIdea: string;
+  commonTopic: string;
+  members: { number: string; name: string; isMe: boolean }[];
+};
+
 const answerDraftKey = (roomCode: string) =>
   `team-matching:answer-draft:${roomCode.toUpperCase()}`;
 
@@ -44,6 +52,8 @@ export function StudentWorkspace({
     className: string | null;
     question: string;
   } | null>(null);
+  const [teamResult, setTeamResult] = useState<StudentTeamResult | null>(null);
+  const [roomClosed, setRoomClosed] = useState(false);
 
   const applyRoomSnapshot = useCallback(
     (data: StudentRoomSnapshot, restoreAnswer = false) => {
@@ -107,7 +117,7 @@ export function StudentWorkspace({
   }, [applyRoomSnapshot, initialRoomCode]);
 
   useEffect(() => {
-    if (phase === "join") return;
+    if (phase === "join" || roomClosed) return;
 
     let cancelled = false;
     async function refreshRoom() {
@@ -115,6 +125,14 @@ export function StudentWorkspace({
         const response = await fetch(`/api/rooms/${roomCode}`, {
           cache: "no-store",
         });
+        // 교사가 수업을 종료하면 룸 데이터가 삭제되어 404가 됩니다.
+        if (response.status === 404) {
+          if (!cancelled) {
+            setRoomClosed(true);
+            setNotice("수업이 종료되어 룸 정보가 삭제되었습니다.");
+          }
+          return;
+        }
         if (!response.ok) return;
         const data = (await response.json()) as StudentRoomSnapshot;
         if (cancelled) return;
@@ -130,7 +148,32 @@ export function StudentWorkspace({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [applyRoomSnapshot, phase, roomCode]);
+  }, [applyRoomSnapshot, phase, roomClosed, roomCode]);
+
+  useEffect(() => {
+    if (phase !== "result" || !roomCode || teamResult) return;
+
+    let cancelled = false;
+    async function loadTeamResult() {
+      try {
+        const response = await fetch(`/api/rooms/${roomCode}/result`, {
+          cache: "no-store",
+        });
+        if (!response.ok) return;
+        const data = (await response.json()) as { team: StudentTeamResult };
+        if (!cancelled) setTeamResult(data.team);
+      } catch {
+        // 결과가 준비되면 다시 시도합니다.
+      }
+    }
+
+    void loadTeamResult();
+    const timer = window.setInterval(loadTeamResult, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [phase, roomCode, teamResult]);
 
   async function joinRoom() {
     setLoading(true);
@@ -335,22 +378,45 @@ export function StudentWorkspace({
 
         {phase === "result" ? (
           <section className="student-card result-card">
-            <span className="team-number">TEAM 01</span>
-            <h1>1조 · 급식 잔반 줄이기</h1>
-            <p className="team-topic">
-              학생 선택형 배식과 만족도 조사를 활용한 학교 급식 잔반 감소 프로젝트
-            </p>
-            <div className="result-members">
-              {["김민서", "이서준", "박지우", name || "나"].map(
-                (member, index) => (
-                  <div key={`${member}-${index}`}>
-                    <span>{member.slice(-1)}</span>
-                    <strong>{member}</strong>
-                    {index === 3 ? <small>나</small> : null}
-                  </div>
-                ),
-              )}
-            </div>
+            {teamResult ? (
+              <>
+                <span className="team-number">
+                  TEAM {String(teamResult.number).padStart(2, "0")}
+                </span>
+                <h1>
+                  {teamResult.name}
+                  {teamResult.representativeIdea
+                    ? ` · ${teamResult.representativeIdea}`
+                    : ""}
+                </h1>
+                {teamResult.commonTopic ? (
+                  <p className="team-topic">{teamResult.commonTopic}</p>
+                ) : null}
+                <div className="result-members">
+                  {teamResult.members.map((member, index) => (
+                    <div key={`${member.number}-${member.name}-${index}`}>
+                      <span>{member.name.slice(-1)}</span>
+                      <strong>
+                        {member.number
+                          ? `${member.number} ${member.name}`
+                          : member.name}
+                      </strong>
+                      {member.isMe ? <small>나</small> : null}
+                    </div>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="pulse-orbit">
+                  <span />
+                </div>
+                <span className="eyebrow">TEAM RESULT</span>
+                <h1>팀 결과를 불러오는 중입니다</h1>
+                <p>교사가 팀 구성을 확정하면 이 화면에 표시됩니다.</p>
+              </>
+            )}
+            {notice ? <small className="privacy-copy">{notice}</small> : null}
             <div className="student-info-note">
               팀 구성 점수나 다른 학생의 원본 답변은 공개되지 않습니다.
             </div>

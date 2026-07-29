@@ -9,6 +9,34 @@ import type {
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
+/** Supabase `response_analyses.embedding`이 vector(1536)이므로 임베딩 차원을 고정합니다. */
+export const EMBEDDING_DIMENSIONS = 1536;
+
+/**
+ * 팀 배정에 쓸 수 있는 응답인지 판단합니다.
+ * 답변이 있고 주제에서 벗어나지 않았다면 임베딩으로 의미 배정을 할 수 있습니다.
+ */
+export function isMatchableAnalysis(analysis: AnalyzedResponse): boolean {
+  return (
+    !analysis.isEmpty &&
+    !analysis.isOffTopic &&
+    analysis.embedding.length > 0
+  );
+}
+
+/**
+ * 매칭 기준 항목 중 하나라도 뚜렷하게 드러나면 매칭 정보가 있다고 봅니다.
+ * 짧게 쓴 답변이 전부 탈락하지 않도록 가중 평균과 개별 항목을 함께 확인합니다.
+ */
+export function hasEnoughMatchingInformation(
+  informationScore: number,
+  fields: { level: number }[],
+): boolean {
+  return (
+    informationScore >= 0.2 || fields.some((field) => field.level >= 2)
+  );
+}
+
 export function canFormNonEmptyTeams(
   participantCount: number,
   teamCount: number,
@@ -83,6 +111,16 @@ export function balancedCapacities(
   );
 }
 
+/**
+ * Seed 점수 가중치입니다.
+ * 분석 모델의 정보량 점수는 대부분의 성실한 답변에서 1.0 근처로 몰려 변별력이 낮고,
+ * 다양성 점수는 0~1 전 구간에 퍼집니다. 정보량을 더 크게 잡으면 거의 같은 주제의 답변이
+ * 연달아 대표로 뽑혀 팀 주제가 겹치므로 다양성에 더 큰 가중치를 둡니다.
+ */
+const SEED_INFORMATION_WEIGHT = 0.3;
+const SEED_DIVERSITY_WEIGHT = 0.55;
+const SEED_SUPPORT_WEIGHT = 0.15;
+
 function supportScore(
   candidate: AnalyzedResponse,
   valid: AnalyzedResponse[],
@@ -104,13 +142,7 @@ export function selectDiverseSeeds(
   requestedCount: number,
   supportThreshold = 0.6,
 ): { seeds: SeedResult[]; warnings: MatchWarning[] } {
-  const valid = analyses.filter(
-    (analysis) =>
-      !analysis.isEmpty &&
-      !analysis.isOffTopic &&
-      analysis.hasMatchingInformation &&
-      analysis.embedding.length > 0,
-  );
+  const valid = analyses.filter(isMatchableAnalysis);
   const warnings: MatchWarning[] = [];
   if (!valid.length) {
     return {
@@ -125,9 +157,11 @@ export function selectDiverseSeeds(
     };
   }
 
-  const thresholds = [0.55, 0.45, 0.35];
+  // 정보량이 많은 응답을 먼저 대표로 쓰되, 팀 수를 채우지 못하면 기준을 단계적으로 낮춥니다.
+  // 마지막 단계(0)에서는 답변이 있는 모든 응답이 후보가 되므로 빈 팀이 생기지 않습니다.
+  const thresholds = [0.55, 0.45, 0.35, 0.25, 0.15, 0];
   let candidates: AnalyzedResponse[] = [];
-  let thresholdUsed = thresholds.at(-1) ?? 0.35;
+  let thresholdUsed = thresholds.at(-1) ?? 0;
   for (const threshold of thresholds) {
     const nextCandidates = valid.filter(
       (analysis) => analysis.informationScore >= threshold,
@@ -151,7 +185,10 @@ export function selectDiverseSeeds(
       informationScore: first.informationScore,
       diversityScore: 1,
       supportScore: support,
-      seedScore: 0.55 * first.informationScore + 0.3 + 0.15 * support,
+      seedScore:
+        SEED_INFORMATION_WEIGHT * first.informationScore +
+        SEED_DIVERSITY_WEIGHT +
+        SEED_SUPPORT_WEIGHT * support,
       thresholdUsed,
     });
   }
@@ -180,9 +217,9 @@ export function selectDiverseSeeds(
         diversityScore: diversity,
         supportScore: support,
         seedScore:
-          0.55 * candidate.informationScore +
-          0.3 * diversity +
-          0.15 * support,
+          SEED_INFORMATION_WEIGHT * candidate.informationScore +
+          SEED_DIVERSITY_WEIGHT * diversity +
+          SEED_SUPPORT_WEIGHT * support,
         thresholdUsed,
       };
     });
@@ -203,7 +240,7 @@ export function selectDiverseSeeds(
       requiresApproval: true,
     });
   }
-  if (thresholdUsed < 0.55) {
+  if (thresholdUsed < 0.35) {
     warnings.push({
       code: "LOW_INFORMATION",
       message: `대표 아이디어가 부족해 Seed 기준을 ${thresholdUsed.toFixed(2)}까지 완화했습니다.`,
@@ -289,10 +326,7 @@ export function buildMatchResult({
     .filter(
       (analysis) =>
         !seededIds.has(analysis.participantId) &&
-        analysis.hasMatchingInformation &&
-        !analysis.isEmpty &&
-        !analysis.isOffTopic &&
-        analysis.embedding.length > 0,
+        isMatchableAnalysis(analysis),
     )
     .map((analysis) => {
       const scores = teams.map((team) => {

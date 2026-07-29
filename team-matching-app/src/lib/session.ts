@@ -68,6 +68,21 @@ export async function setParticipantSession(
   await setSessionCookie(PARTICIPANT_COOKIE, participantId, token);
 }
 
+async function clearSessionCookie(name: string): Promise<void> {
+  const store = await cookies();
+  store.set(name, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+}
+
+export async function clearTeacherSession(): Promise<void> {
+  await clearSessionCookie(TEACHER_COOKIE);
+}
+
 export async function getTeacherSession() {
   const store = await cookies();
   return parseSession(store.get(TEACHER_COOKIE)?.value);

@@ -6,6 +6,7 @@ import QRCode from "qrcode";
 import { AppHeader } from "@/components/app-header";
 import { defaultRubric } from "@/lib/matching-defaults";
 import { canFormNonEmptyTeams } from "@/lib/matching";
+import { ROOM_RETENTION_HOURS } from "@/lib/room-policy";
 import type {
   Criterion,
   MatchResult,
@@ -555,16 +556,68 @@ export function TeacherWorkspace() {
   }
 
   async function completeMatching() {
+    if (!matchResult) return;
     try {
-      await saveRoomPhase("completed");
+      // 검토 화면에서 옮긴 학생까지 반영해 최종 구성을 저장합니다.
+      if (roomCode && matchResult.runId) {
+        const response = await fetch(`/api/rooms/${roomCode}/result`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            runId: matchResult.runId,
+            teams: matchResult.teams.map((team) => ({
+              seedParticipantId: team.seedParticipantId,
+              representativeIdea: team.representativeIdea,
+              commonTopic: team.commonTopic,
+              reason: team.reason,
+              members: team.members,
+            })),
+          }),
+        });
+        const data = (await response.json()) as { error?: string };
+        if (!response.ok) {
+          throw new Error(data.error || "팀 확정 저장에 실패했습니다.");
+        }
+      } else {
+        await saveRoomPhase("completed");
+      }
       setPhase("completed");
-      setNotice("팀 구성을 확정했습니다.");
+      setNotice(
+        "팀 구성을 확정했습니다. 학생 화면에서 결과를 확인할 수 있습니다.",
+      );
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "팀 확정 실패");
     }
   }
 
+  async function endClassAndDeleteRoom() {
+    if (!roomCode) return;
+    const confirmed = window.confirm(
+      `룸 ${roomCode}의 학생 명단, 답변, 분석, 팀 결과를 모두 삭제합니다.\n삭제하면 학생 화면에서도 결과를 볼 수 없고 되돌릴 수 없습니다.\n\n계속할까요?`,
+    );
+    if (!confirmed) return;
+    try {
+      const response = await fetch(`/api/rooms/${roomCode}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        const data = (await response.json()) as { error?: string };
+        throw new Error(data.error || "룸 삭제에 실패했습니다.");
+      }
+      resetForNewRoom();
+      setNotice(`룸 ${roomCode}의 데이터를 모두 삭제했습니다.`);
+    } catch (error) {
+      setNotice(
+        error instanceof Error ? error.message : "룸 삭제에 실패했습니다.",
+      );
+    }
+  }
+
   async function runMatching() {
+    if (!participants.length) {
+      setNotice("입장한 학생이 없어 팀을 만들 수 없습니다.");
+      return;
+    }
     if (
       config.teamMode === "fixed" &&
       !canFormNonEmptyTeams(
@@ -599,14 +652,21 @@ export function TeacherWorkspace() {
           requestedTeamCount:
             runtimeConfig.teamMode === "fixed"
               ? runtimeConfig.fixedTeamCount || calculatedTeamCount
-              : Math.ceil(
-                  participants.length / runtimeConfig.targetTeamSize,
+              : Math.max(
+                  1,
+                  Math.ceil(
+                    participants.length / runtimeConfig.targetTeamSize,
+                  ),
                 ),
           hardMax: runtimeConfig.hardMax,
         }),
       });
-      if (!response.ok) throw new Error("팀 구성 실패");
-      const data = (await response.json()) as MatchResult;
+      const data = (await response.json()) as MatchResult & {
+        error?: string;
+      };
+      if (!response.ok) {
+        throw new Error(data.error || "팀 구성에 실패했습니다.");
+      }
       if (roomCode) await saveRoomPhase("review");
       setMatchResult(data);
       setApprovals([]);
@@ -616,8 +676,12 @@ export function TeacherWorkspace() {
           ? "Gemini 분석과 임베딩을 사용해 팀 추천안을 만들었습니다."
           : "AI 호출을 사용할 수 없어 기본 분석으로 추천안을 만들었습니다.",
       );
-    } catch {
-      setNotice("팀 구성 중 오류가 발생했습니다. 다시 시도해 주세요.");
+    } catch (error) {
+      setNotice(
+        error instanceof Error
+          ? error.message
+          : "팀 구성 중 오류가 발생했습니다. 다시 시도해 주세요.",
+      );
     } finally {
       setMatchLoading(false);
     }
@@ -1371,15 +1435,20 @@ export function TeacherWorkspace() {
                   </article>
                 ))}
               </div>
+              <p className="inline-help">
+                학생은 입장했던 링크에서 자기 팀과 팀원을 확인할 수 있습니다.
+                수업이 끝나면 아래에서 데이터를 삭제해 주세요. 삭제하지 않아도
+                {` ${ROOM_RETENTION_HOURS}시간`} 뒤에 자동으로 정리됩니다.
+              </p>
               <div className="panel-footer center">
                 <button className="button secondary" onClick={copyJoinLink}>
-                  학생 결과 링크 복사
+                  {copied ? "복사됨 ✓" : "학생 결과 링크 복사"}
                 </button>
                 <button
-                  className="button primary"
-                  onClick={() => setNotice("학생 결과가 공개되었습니다.")}
+                  className="button danger"
+                  onClick={endClassAndDeleteRoom}
                 >
-                  학생에게 결과 공개
+                  수업 종료 및 데이터 삭제
                 </button>
               </div>
             </section>

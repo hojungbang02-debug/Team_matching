@@ -3,7 +3,10 @@ import type {
   Criterion,
   ParticipantInput,
 } from "@/lib/types";
-import { deterministicVector } from "@/lib/matching";
+import {
+  deterministicVector,
+  hasEnoughMatchingInformation,
+} from "@/lib/matching";
 
 export const defaultRubric: Criterion[] = [
   {
@@ -75,7 +78,9 @@ export function buildFallbackAnalyses(
       isEmpty,
       isOffTopic,
       hasMatchingInformation:
-        !isEmpty && !isOffTopic && informationScore >= 0.35,
+        !isEmpty &&
+        !isOffTopic &&
+        hasEnoughMatchingInformation(informationScore, fields),
       reason: isEmpty
         ? "제출된 답변이 없습니다."
         : isOffTopic
