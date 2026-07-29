@@ -1,7 +1,7 @@
 import { zodResponseFormat } from "openai/helpers/zod";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { defaultRubric } from "@/lib/demo-data";
+import { defaultRubric } from "@/lib/matching-defaults";
 import { createGeminiClient } from "@/lib/gemini";
 
 const RequestSchema = z.object({

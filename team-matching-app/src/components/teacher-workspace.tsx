@@ -4,7 +4,7 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import QRCode from "qrcode";
 import { AppHeader } from "@/components/app-header";
-import { defaultRubric } from "@/lib/demo-data";
+import { defaultRubric } from "@/lib/matching-defaults";
 import type {
   Criterion,
   MatchResult,
@@ -514,7 +514,7 @@ export function TeacherWorkspace() {
       setNotice(
         data.source === "gemini"
           ? "Gemini 분석과 임베딩을 사용해 팀 추천안을 만들었습니다."
-          : "AI 호출을 사용할 수 없어 데모 fallback으로 추천안을 만들었습니다.",
+          : "AI 호출을 사용할 수 없어 기본 분석으로 추천안을 만들었습니다.",
       );
     } catch {
       setNotice("팀 구성 중 오류가 발생했습니다. 다시 시도해 주세요.");
@@ -1021,7 +1021,7 @@ export function TeacherWorkspace() {
                 <span className={`source-chip ${matchResult.source}`}>
                   {matchResult.source === "gemini"
                     ? "Gemini 분석"
-                    : "Demo fallback"}
+                    : "기본 분석"}
                 </span>
               </div>
               <div className="stat-grid">

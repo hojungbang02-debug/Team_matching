@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import { zodResponseFormat } from "openai/helpers/zod";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { buildFallbackAnalyses } from "@/lib/demo-data";
+import { buildFallbackAnalyses } from "@/lib/matching-defaults";
 import { createGeminiClient } from "@/lib/gemini";
 import { buildMatchResult } from "@/lib/matching";
 import { requireTeacherRoom } from "@/lib/rooms";

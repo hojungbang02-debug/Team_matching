@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { demoParticipants, defaultRubric, buildFallbackAnalyses } from "./demo-data";
+import {
+  buildFallbackAnalyses,
+  defaultRubric,
+} from "./matching-defaults";
+import { testParticipants } from "./matching.fixtures";
 import {
   balancedCapacities,
   buildMatchResult,
@@ -23,23 +27,23 @@ describe("matching utilities", () => {
   });
 
   it("selects distinct seeds and assigns every participant exactly once", () => {
-    const analyses = buildFallbackAnalyses(demoParticipants, defaultRubric);
-    const seedSelection = selectDiverseSeeds(analyses, 6);
+    const analyses = buildFallbackAnalyses(testParticipants, defaultRubric);
+    const seedSelection = selectDiverseSeeds(analyses, 3);
     expect(new Set(seedSelection.seeds.map((seed) => seed.participantId)).size).toBe(
       seedSelection.seeds.length,
     );
 
     const result = buildMatchResult({
-      participants: demoParticipants,
+      participants: testParticipants,
       analyses,
-      requestedTeamCount: 6,
-      hardMax: 6,
+      requestedTeamCount: 3,
+      hardMax: 3,
       source: "demo-fallback",
     });
     const assigned = result.teams.flatMap((team) =>
       team.members.map((member) => member.participantId),
     );
-    expect(assigned).toHaveLength(demoParticipants.length);
-    expect(new Set(assigned).size).toBe(demoParticipants.length);
+    expect(assigned).toHaveLength(testParticipants.length);
+    expect(new Set(assigned).size).toBe(testParticipants.length);
   });
 });
